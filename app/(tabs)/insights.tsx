@@ -28,7 +28,7 @@ export default function InsightsScreen() {
   const handleRecommendationAction = (rec: AIRecommendation) => {
     Alert.alert(
       rec.title,
-      `Action initiated: "${rec.actionLabel}". Digital twin calibration has scheduled this telemetry event.`
+      `Action initiated: "${rec.actionLabel}".`
     );
   };
 
@@ -40,16 +40,9 @@ export default function InsightsScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Title & Realtime Feed Header */}
+        {/* Title Header */}
         <View style={styles.topHeaderRow}>
-          <View>
-            <Text style={styles.sectionOverline}>NEURAL ANALYTICS</Text>
-            <Text style={styles.sectionTitle}>Predictive Insights & Trends</Text>
-          </View>
-          <View style={styles.realtimePill}>
-            <View style={styles.realtimeDot} />
-            <Text style={styles.realtimeText}>REALTIME FEED</Text>
-          </View>
+          <Text style={styles.sectionTitle}>Insights & Trends</Text>
         </View>
 
         {/* Timeframe Segment Filter (Day / Week / Month) */}
@@ -109,34 +102,36 @@ export default function InsightsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Biometric Risk Prediction Card */}
+        {/* Health Risk Score Card */}
         <View style={styles.riskCard}>
           <View style={styles.riskHeader}>
             <View style={styles.riskHeaderLeft}>
               <View style={styles.riskIconRow}>
                 <MaterialIcons name="timeline" size={16} color={colors.primary} />
-                <Text style={styles.riskOverline}>BIOMETRIC TWIN INDEX</Text>
+                <Text style={styles.riskTitle}>Health Risk Score</Text>
               </View>
-              <Text style={styles.riskTitle}>Overall Cardiovascular & Metabolic Risk Index</Text>
             </View>
 
-            <View style={styles.riskScoreBadge}>
-              <View style={styles.riskDot} />
-              <Text style={styles.riskScoreText}>LOW RISK — {chartData.riskPercent}%</Text>
+            <View style={styles.badgeGroup}>
+              <View style={styles.demoPill}>
+                <Text style={styles.demoText}>Demo data</Text>
+              </View>
+              <View style={styles.riskScoreBadge}>
+                <View style={styles.riskDot} />
+                <Text style={styles.riskScoreText}>Low risk</Text>
+              </View>
             </View>
           </View>
 
           {/* Comparative Scale Gauge */}
           <View style={styles.gaugeContainer}>
             <View style={styles.gaugeScaleLabels}>
-              <Text style={styles.scaleStart}>0% Baseline Optimal</Text>
-              <Text style={styles.scaleCurrent}>Current: {chartData.riskPercent}%</Text>
-              <Text style={styles.scaleEnd}>100% Critical Alert</Text>
+              <Text style={styles.scaleStart}>Low</Text>
+              <Text style={styles.scaleEnd}>High</Text>
             </View>
 
             <View style={styles.gaugeTrack}>
               <View style={styles.gaugeGradientBar} />
-              {/* Pointer Indicator */}
               <View
                 style={[
                   styles.gaugePointer,
@@ -146,26 +141,25 @@ export default function InsightsScreen() {
             </View>
           </View>
 
-          {/* AI Projection Note */}
+          {/* Description Box */}
           <View style={styles.projectionBox}>
-            <MaterialIcons name="smart-toy" size={18} color={colors.secondary} style={{ marginTop: 2 }} />
+            <MaterialIcons name="info-outline" size={18} color={colors.secondary} style={{ marginTop: 2 }} />
             <Text style={styles.projectionText}>
-              <Text style={{ fontWeight: '700', color: colors.onSurface }}>AI Projection: </Text>
-              Based on {timeframe === 'day' ? '24-hour' : timeframe === 'month' ? '30-day' : '7-day'} continuous telemetry, sympathetic tone and systemic inflammation proxies indicate acute arrhythmia risk remains minimal.
+              Based on your last 7 days of heart rate and sleep.
             </Text>
           </View>
         </View>
 
-        {/* Telemetry Streams Section */}
+        {/* Telemetry Charts Section */}
         <View style={styles.streamSection}>
           <View style={styles.streamHeaderRow}>
             <View style={styles.streamTitleGroup}>
               <MaterialIcons name="show-chart" size={18} color={colors.primary} />
-              <Text style={styles.streamSectionTitle}>TELEMETRY STREAMS</Text>
+              <Text style={styles.streamSectionTitle}>Health Trends</Text>
             </View>
-            <Text style={styles.streamAggregationText}>
-              {timeframe === 'day' ? '24-Hour Stream' : timeframe === 'month' ? '30-Day Aggregation' : '7-Day Aggregation'}
-            </Text>
+            <View style={styles.demoPill}>
+              <Text style={styles.demoText}>Demo data</Text>
+            </View>
           </View>
 
           {/* Heart Rate Trend Chart Card */}
@@ -194,12 +188,12 @@ export default function InsightsScreen() {
             <LineChart points={chartData.heartRatePoints} height={120} />
           </View>
 
-          {/* Stress Level Distribution Chart Card */}
+          {/* Stress Levels Chart Card */}
           <View style={styles.chartCard}>
             <View style={styles.stressHeader}>
-              <View>
-                <Text style={styles.chartCardLabel}>Autonomic Sympathetic Tone</Text>
-                <Text style={styles.stressTitle}>Stress Distribution</Text>
+              <Text style={styles.stressTitle}>Stress Levels</Text>
+              <View style={styles.demoPill}>
+                <Text style={styles.demoText}>Demo data</Text>
               </View>
             </View>
 
@@ -207,14 +201,19 @@ export default function InsightsScreen() {
           </View>
         </View>
 
-        {/* Detected Chrono-Anomalies Section */}
+        {/* Unusual Events Section */}
         <View style={styles.anomaliesSection}>
           <View style={styles.anomaliesHeaderRow}>
             <View style={styles.streamTitleGroup}>
               <MaterialIcons name="warning" size={18} color={colors.secondary} />
-              <Text style={styles.anomaliesTitle}>Detected Chrono-Anomalies</Text>
+              <Text style={styles.anomaliesTitle}>Unusual Events</Text>
             </View>
-            <Text style={styles.anomaliesCount}>{anomalies.length} Events Recorded</Text>
+            <View style={styles.badgeGroup}>
+              <View style={styles.demoPill}>
+                <Text style={styles.demoText}>Demo data</Text>
+              </View>
+              <Text style={styles.anomaliesCount}>{anomalies.length} Events</Text>
+            </View>
           </View>
 
           <View style={styles.anomaliesList}>
@@ -263,27 +262,27 @@ export default function InsightsScreen() {
           </View>
         </View>
 
-        {/* Digital Twin Directives & AI Recommendations */}
+        {/* Suggestions Section */}
         <View style={styles.directivesSection}>
           <View style={styles.directivesHeader}>
             <View>
-              <Text style={styles.directivesTitle}>Digital Twin Directives</Text>
+              <Text style={styles.directivesTitle}>Suggestions</Text>
               <Text style={styles.directivesSubtitle}>
-                Dynamic interventions tailored to real-time organ telemetry
+                Personalized tips based on your recent readings
               </Text>
             </View>
-            <View style={styles.directivesPulseIcon}>
-              <MaterialIcons name="psychology" size={20} color={colors.primary} />
+            <View style={styles.demoPill}>
+              <Text style={styles.demoText}>Demo data</Text>
             </View>
           </View>
 
-          {/* Directives Filter Pills */}
+          {/* Filter Pills */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.directiveFiltersRow}
           >
-            {['all', 'sleep', 'stress', 'hydration', 'activity'].map((cat) => (
+            {['all', 'sleep', 'stress', 'activity'].map((cat) => (
               <TouchableOpacity
                 key={cat}
                 style={[
@@ -300,13 +299,13 @@ export default function InsightsScreen() {
                   ]}
                 >
                   {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                  {cat === 'all' ? ' (4)' : ''}
+                  {cat === 'all' ? ` (${recommendations.length})` : ''}
                 </Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
 
-          {/* List of Directives */}
+          {/* List of Suggestions */}
           <View style={styles.directivesList}>
             {recommendations.map((rec) => (
               <InterventionCard
@@ -318,12 +317,12 @@ export default function InsightsScreen() {
           </View>
         </View>
 
-        {/* Mandatory Medical Disclaimer (Fix 7) */}
+        {/* Mandatory Medical Disclaimer */}
         <View style={styles.disclaimerCard}>
           <MaterialIcons name="verified-user" size={18} color={colors.outline} style={{ marginTop: 2 }} />
           <Text style={styles.disclaimerText}>
             <Text style={{ fontWeight: '700', color: colors.onSurfaceVariant }}>Medical Notice: </Text>
-            For information only, not medical advice. Computational telemetry insights and twin projections do not constitute a medical diagnosis. Consult a licensed physician for clinical interpretation.
+            For information only, not medical advice. Consult a healthcare professional for clinical advice or before making medical decisions.
           </Text>
         </View>
       </ScrollView>
@@ -347,37 +346,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  sectionOverline: {
-    ...typography.labelCapsXs,
-    color: colors.primary,
-    letterSpacing: 1.1,
-  },
   sectionTitle: {
     ...typography.titleMd,
     color: colors.onSurface,
     fontWeight: '700',
-    fontSize: 18,
-  },
-  realtimePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: colors.surfaceContainerHigh,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radii.full,
-  },
-  realtimeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.tertiary,
-  },
-  realtimeText: {
-    ...typography.labelCapsXs,
-    color: colors.tertiary,
-    fontWeight: '700',
-    fontSize: 8.5,
+    fontSize: 20,
   },
   timeframeSegment: {
     flexDirection: 'row',
@@ -419,29 +392,40 @@ const styles = StyleSheet.create({
   },
   riskHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
   },
   riskHeaderLeft: {
     flex: 1,
-    gap: 2,
   },
   riskIconRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-  },
-  riskOverline: {
-    ...typography.labelCapsXs,
-    color: colors.onSurfaceVariant,
-    fontSize: 9,
+    gap: 6,
   },
   riskTitle: {
     ...typography.titleMd,
     color: colors.onSurface,
     fontWeight: '700',
-    fontSize: 15,
+    fontSize: 16,
+  },
+  badgeGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  demoPill: {
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.full,
+  },
+  demoText: {
+    ...typography.labelCapsXs,
+    color: colors.onSurfaceVariant,
+    fontSize: 9,
+    textTransform: 'none',
   },
   riskScoreBadge: {
     flexDirection: 'row',
@@ -459,10 +443,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.tertiary,
   },
   riskScoreText: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.tertiary,
     fontWeight: '700',
-    fontSize: 8.5,
+    fontSize: 11,
   },
   gaugeContainer: {
     gap: 6,
@@ -473,20 +457,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   scaleStart: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.tertiary,
-    fontSize: 8.5,
-  },
-  scaleCurrent: {
-    ...typography.labelCapsXs,
-    color: colors.secondary,
-    fontWeight: '700',
-    fontSize: 8.5,
+    fontSize: 11,
+    fontWeight: '600',
   },
   scaleEnd: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 8.5,
+    fontSize: 11,
+    fontWeight: '600',
   },
   gaugeTrack: {
     height: 8,
@@ -527,6 +507,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(35, 42, 57, 0.7)',
     padding: 10,
     borderRadius: radii.md,
+    alignItems: 'center',
   },
   projectionText: {
     ...typography.bodySm,
@@ -549,15 +530,10 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   streamSectionTitle: {
-    ...typography.labelCapsMd,
+    ...typography.titleMd,
     color: colors.onSurface,
     fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  streamAggregationText: {
-    ...typography.dataMono,
-    color: colors.secondary,
-    fontSize: 11,
+    fontSize: 16,
   },
   chartCard: {
     backgroundColor: colors.surfaceContainer,
@@ -573,9 +549,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   chartCardLabel: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 9,
+    fontSize: 12,
   },
   avgBpmRow: {
     flexDirection: 'row',
@@ -609,6 +585,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   stressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 4,
   },
   stressTitle: {
@@ -632,9 +611,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   anomaliesCount: {
-    ...typography.labelCapsXs,
+    ...typography.dataMono,
     color: colors.onSurfaceVariant,
-    fontSize: 9,
+    fontSize: 11,
   },
   anomaliesList: {
     gap: 8,
@@ -664,7 +643,7 @@ const styles = StyleSheet.create({
   },
   anomalyTimeText: {
     ...typography.dataMono,
-    fontSize: 10.5,
+    fontSize: 11,
     fontWeight: '700',
   },
   anomalyTagPill: {
@@ -676,7 +655,8 @@ const styles = StyleSheet.create({
   anomalyTagText: {
     ...typography.labelCapsXs,
     color: colors.onSurfaceVariant,
-    fontSize: 8,
+    fontSize: 9,
+    textTransform: 'none',
   },
   anomalyDesc: {
     ...typography.bodySm,
@@ -704,14 +684,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     marginTop: 1,
   },
-  directivesPulseIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceContainerHigh,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   directiveFiltersRow: {
     flexDirection: 'row',
     gap: 8,
@@ -737,6 +709,7 @@ const styles = StyleSheet.create({
     ...typography.labelCapsMd,
     color: colors.onSurfaceVariant,
     fontSize: 10.5,
+    textTransform: 'none',
   },
   filterPillTextActive: {
     color: colors.onPrimary,

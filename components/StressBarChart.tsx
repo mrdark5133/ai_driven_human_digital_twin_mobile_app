@@ -17,7 +17,7 @@ export const StressBarChart: React.FC<StressBarChartProps> = ({ days }) => {
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendBox, { backgroundColor: colors.secondaryContainer }]} />
-          <Text style={styles.legendText}>Elevated</Text>
+          <Text style={styles.legendText}>High</Text>
         </View>
       </View>
 

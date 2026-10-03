@@ -131,7 +131,8 @@ export interface ChatMessage {
   telemetryWidget?: {
     label: string;
     value: string;
-    targetStrain: string;
+    suggestion?: string;
+    targetStrain?: string;
   };
 }
 

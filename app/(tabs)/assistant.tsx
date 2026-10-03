@@ -20,11 +20,9 @@ import { ChatMessage } from '../../types';
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(DataService.getChatHistory());
   const [inputText, setInputText] = useState('');
-  const [isListening, setIsListening] = useState(true);
+  const [isListening, setIsListening] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
-
-  const settings = DataService.getSettings();
 
   useEffect(() => {
     const unsubscribe = DataService.subscribe(() => {
@@ -44,7 +42,7 @@ export default function AssistantScreen() {
 
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    }, 150);
   };
 
   const handleToggleMic = () => {
@@ -64,9 +62,8 @@ export default function AssistantScreen() {
           ref={scrollViewRef}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: false })}
         >
-          {/* Top Status Diagnostic Header */}
+          {/* Top Status Header */}
           <View style={styles.agentStatusCard}>
             <View style={styles.statusHeaderRow}>
               <View style={styles.agentInfoGroup}>
@@ -75,34 +72,29 @@ export default function AssistantScreen() {
                   <View style={styles.pulseDot} />
                 </View>
                 <View>
-                  <Text style={styles.agentTitle}>AURA • BIOMETRIC CLINICAL AGENT</Text>
-                  <Text style={styles.agentSub}>SYNAPSE ENGINE v4.8 • BIO-VOICE LINK</Text>
+                  <Text style={styles.agentTitle}>AURA</Text>
+                  <Text style={styles.agentSub}>Health Assistant</Text>
                 </View>
               </View>
 
               <View style={styles.neuralPill}>
-                <MaterialIcons name="sensors" size={13} color={colors.tertiary} />
-                <Text style={styles.neuralText}>NEURAL LINK ACTIVE</Text>
+                <MaterialIcons name="check-circle" size={13} color={colors.tertiary} />
+                <Text style={styles.neuralText}>Active</Text>
               </View>
             </View>
           </View>
 
-          {/* Holographic Voice Visualizer & Voice Orb Area */}
+          {/* Voice Orb Area - Fixed height block */}
           <View style={styles.voiceOrbCard}>
-            {/* Ambient Cyan Glows */}
-            <View style={styles.ambientGlow} />
-
-            {/* Concentric rings with Center Glowing Mic Orb Button (80px) */}
+            {/* Concentric rings with Center Mic Button */}
             <View style={styles.concentricRings}>
-              <View style={styles.ringOuter}>
-                <View style={styles.ringMiddle}>
-                  <View style={styles.ringInner} />
-                </View>
-              </View>
+              <View style={styles.ringOuter} />
+              <View style={styles.ringMiddle} />
+              <View style={styles.ringInner} />
 
               {/* Holographic Equalizer Wave */}
               <View style={styles.waveOverlay}>
-                <Svg width={180} height={70} viewBox="0 0 200 80">
+                <Svg width={140} height={50} viewBox="0 0 200 80">
                   <Path
                     d="M10 40 Q 30 15, 55 40 T 100 40 T 145 40 T 190 40"
                     fill="none"
@@ -128,7 +120,7 @@ export default function AssistantScreen() {
                 </Svg>
               </View>
 
-              {/* 80px Glowing Mic Orb Button */}
+              {/* Mic Orb Button */}
               <TouchableOpacity
                 style={[
                   styles.micOrbButton,
@@ -139,8 +131,8 @@ export default function AssistantScreen() {
               >
                 <MaterialIcons
                   name={isListening ? 'mic' : 'mic-off'}
-                  size={34}
-                  color="#070e1c"
+                  size={30}
+                  color={isListening ? '#070e1c' : colors.onSurfaceVariant}
                 />
               </TouchableOpacity>
             </View>
@@ -160,75 +152,64 @@ export default function AssistantScreen() {
                     { color: isListening ? colors.secondary : colors.outline },
                   ]}
                 >
-                  {isListening ? 'LISTENING CONTINUOUSLY' : 'MICROPHONE MUTED'}
+                  {isListening ? 'Listening...' : 'Tap to speak'}
                 </Text>
               </View>
-              <Text style={styles.agentStateSubtitle}>
+              <Text style={styles.agentStateSubtitle} numberOfLines={1}>
                 {isListening
-                  ? 'Aura is analyzing continuous ECG telemetry and ambient biometric context...'
-                  : 'Continuous speech stream paused. Tap orb to reactivate voice.'}
+                  ? 'Listening to your question...'
+                  : 'Ask about your heart rate, sleep or stress.'}
               </Text>
             </View>
           </View>
 
           {/* Quick Action Chips (Horizontal Scroll) */}
           <View style={styles.chipsSection}>
-            <View style={styles.chipsHeaderRow}>
-              <Text style={styles.chipsTitle}>SUGGESTED INQUIRIES</Text>
-              <Text style={styles.chipsSubtitle}>REALTIME TWIN FEED</Text>
-            </View>
+            <Text style={styles.chipsTitle}>Suggested questions</Text>
 
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.chipsRow}
             >
-              {/* Chip 1 */}
               <TouchableOpacity
                 style={styles.chipBtn}
-                onPress={() => handleSendMessage("Check my full health score and today's readiness.")}
+                onPress={() => handleSendMessage('How is my health score today?')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.tertiary }]} />
-                <Text style={styles.chipText}>Check my full health score</Text>
+                <Text style={styles.chipText}>How is my health score?</Text>
               </TouchableOpacity>
 
-              {/* Chip 2 */}
               <TouchableOpacity
                 style={styles.chipBtn}
-                onPress={() => handleSendMessage('Why did my heart rate spike at 4:12 AM during REM sleep?')}
+                onPress={() => handleSendMessage('Why did my heart rate spike at 4:12 AM?')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.secondary }]} />
                 <Text style={styles.chipText}>Why did my heart rate spike?</Text>
               </TouchableOpacity>
 
-              {/* Chip 3 (Dynamic Emergency Contact) */}
-              <TouchableOpacity
-                style={[styles.chipBtn, styles.emergencyChip]}
-                onPress={() => handleSendMessage(`Initiate telemetry relay and contact ${settings.emergencyContactName}.`)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="emergency" size={13} color="#ffdad6" />
-                <Text style={[styles.chipText, { color: '#ffdad6', fontWeight: '700' }]}>
-                  Call {settings.emergencyContactName.split(' ')[0]} (Emergency)
-                </Text>
-              </TouchableOpacity>
-
-              {/* Chip 4 */}
               <TouchableOpacity
                 style={styles.chipBtn}
-                onPress={() => handleSendMessage("Explain my twin's lung data and SpO2 trends.")}
+                onPress={() => handleSendMessage('How was my sleep last night?')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.primary }]} />
-                <Text style={styles.chipText}>Explain twin's lung data</Text>
+                <Text style={styles.chipText}>How was my sleep?</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
 
           {/* Conversation Stream */}
           <View style={styles.conversationList}>
+            <View style={styles.convoHeaderRow}>
+              <Text style={styles.convoTitle}>Conversation</Text>
+              <View style={styles.demoPill}>
+                <Text style={styles.demoText}>Demo data</Text>
+              </View>
+            </View>
+
             {messages.map((msg) => {
               const isUser = msg.sender === 'user';
 
@@ -243,7 +224,7 @@ export default function AssistantScreen() {
                   <View style={styles.msgHeader}>
                     <MaterialIcons
                       name={isUser ? 'person' : 'psychology'}
-                      size={12}
+                      size={14}
                       color={isUser ? colors.primary : colors.secondary}
                     />
                     <Text
@@ -252,7 +233,7 @@ export default function AssistantScreen() {
                         { color: isUser ? colors.primary : colors.secondary },
                       ]}
                     >
-                      {isUser ? 'You (Voice)' : 'Aura • Biometric Insight'}
+                      {isUser ? 'You' : 'AURA'}
                     </Text>
                     <Text style={styles.msgTime}>{msg.timeStr}</Text>
                   </View>
@@ -265,22 +246,25 @@ export default function AssistantScreen() {
                   >
                     <Text style={styles.msgBodyText}>{msg.text}</Text>
 
-                    {/* Embedded Telemetry Micro-Widget */}
+                    {/* Embedded Health Widget Card */}
                     {msg.telemetryWidget ? (
                       <View style={styles.embeddedWidget}>
                         <View style={styles.widgetLeft}>
                           <View style={styles.widgetIconBox}>
-                            <MaterialIcons name="battery-charging-full" size={16} color={colors.secondary} />
+                            <MaterialIcons name="bedtime" size={16} color={colors.secondary} />
                           </View>
                           <View>
-                            <Text style={styles.widgetLabel}>{msg.telemetryWidget.label}</Text>
-                            <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
+                            <Text style={styles.widgetLabel}>
+                              {msg.telemetryWidget.label}: <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
+                            </Text>
+                            <Text style={styles.widgetSuggestion}>
+                              {msg.telemetryWidget.suggestion || msg.telemetryWidget.targetStrain}
+                            </Text>
                           </View>
                         </View>
 
-                        <View style={styles.widgetRight}>
-                          <Text style={styles.targetStrainLabel}>TARGET STRAIN</Text>
-                          <Text style={styles.targetStrainVal}>{msg.telemetryWidget.targetStrain}</Text>
+                        <View style={styles.demoPillSmall}>
+                          <Text style={styles.demoTextSmall}>Demo data</Text>
                         </View>
                       </View>
                     ) : null}
@@ -291,34 +275,19 @@ export default function AssistantScreen() {
           </View>
         </ScrollView>
 
-        {/* Bottom Input Dock & Transmission Console */}
+        {/* Bottom Input Dock */}
         <View style={styles.bottomDock}>
           <View style={styles.inputConsole}>
-            {/* Biomarker attachment button */}
-            <TouchableOpacity style={styles.attachBtn} activeOpacity={0.7}>
-              <MaterialIcons name="attachment" size={18} color={colors.onSurfaceVariant} />
-            </TouchableOpacity>
-
-            {/* Text Input */}
             <TextInput
               style={styles.textInput}
               value={inputText}
               onChangeText={setInputText}
-              placeholder="Ask Aura about vitals, sleep, or twin..."
+              placeholder="Ask Aura about heart rate, sleep or stress..."
               placeholderTextColor={colors.outline}
               onSubmitEditing={() => handleSendMessage()}
               returnKeyType="send"
             />
 
-            {/* Audio Waveform Signal Indicator */}
-            <View style={styles.audioBars}>
-              <View style={[styles.audioBar, { height: 10 }]} />
-              <View style={[styles.audioBar, { height: 16 }]} />
-              <View style={[styles.audioBar, { height: 12 }]} />
-              <View style={[styles.audioBar, { height: 18 }]} />
-            </View>
-
-            {/* Send Button */}
             <TouchableOpacity
               style={styles.sendBtn}
               onPress={() => handleSendMessage()}
@@ -328,6 +297,7 @@ export default function AssistantScreen() {
               <MaterialIcons name="arrow-upward" size={18} color="#070e1c" />
             </TouchableOpacity>
           </View>
+          <Text style={styles.bottomDisclaimer}>Aura gives general tips, not medical advice.</Text>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -342,13 +312,14 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: spacing.margin,
     paddingTop: 12,
-    paddingBottom: 110,
-    gap: spacing.spaceMd,
+    paddingBottom: 24,
+    gap: 14,
   },
   agentStatusCard: {
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.xl,
-    padding: spacing.spaceMd,
+    paddingHorizontal: spacing.spaceMd,
+    paddingVertical: 12,
     borderWidth: 1,
     borderColor: 'rgba(30, 41, 59, 0.45)',
   },
@@ -385,15 +356,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.secondary,
   },
   agentTitle: {
-    ...typography.labelCapsMd,
+    ...typography.titleMd,
     color: colors.primary,
     fontWeight: '700',
-    fontSize: 10.5,
+    fontSize: 14,
   },
   agentSub: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 8.5,
+    fontSize: 11,
   },
   neuralPill: {
     flexDirection: 'row',
@@ -408,55 +379,46 @@ const styles = StyleSheet.create({
     ...typography.labelCapsXs,
     color: colors.tertiary,
     fontWeight: '700',
-    fontSize: 8,
+    fontSize: 9,
+    textTransform: 'none',
   },
   voiceOrbCard: {
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.xl,
-    padding: spacing.spaceLg,
+    paddingVertical: 16,
+    paddingHorizontal: spacing.spaceMd,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-    minHeight: 270,
     borderWidth: 1,
     borderColor: 'rgba(76, 215, 246, 0.2)',
-  },
-  ambientGlow: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(76, 215, 246, 0.08)',
+    height: 200,
   },
   concentricRings: {
-    width: 190,
-    height: 190,
+    width: 120,
+    height: 120,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
   ringOuter: {
     position: 'absolute',
-    width: 190,
-    height: 190,
-    borderRadius: 95,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     backgroundColor: 'rgba(25, 32, 46, 0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   ringMiddle: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    position: 'absolute',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: 'rgba(35, 42, 57, 0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   ringInner: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    position: 'absolute',
+    width: 74,
+    height: 74,
+    borderRadius: 37,
     backgroundColor: 'rgba(46, 53, 68, 0.4)',
   },
   waveOverlay: {
@@ -465,18 +427,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   micOrbButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.6,
-    shadowRadius: 20,
-    elevation: 8,
-    borderWidth: 3,
+    shadowRadius: 14,
+    elevation: 6,
+    borderWidth: 2.5,
     borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   micOrbButtonMuted: {
@@ -486,16 +448,16 @@ const styles = StyleSheet.create({
   },
   agentStateColumn: {
     alignItems: 'center',
-    marginTop: 14,
-    gap: 4,
+    marginTop: 10,
+    gap: 3,
   },
   listeningBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     backgroundColor: 'rgba(35, 42, 57, 0.8)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
     borderRadius: radii.full,
   },
   stateDot: {
@@ -504,8 +466,8 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   listeningBadgeText: {
-    ...typography.labelCapsMd,
-    fontSize: 9.5,
+    ...typography.bodySm,
+    fontSize: 11,
     fontWeight: '700',
   },
   agentStateSubtitle: {
@@ -513,28 +475,17 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     fontSize: 11.5,
     textAlign: 'center',
-    maxWidth: 280,
     lineHeight: 16,
   },
   chipsSection: {
-    gap: 8,
-  },
-  chipsHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 6,
   },
   chipsTitle: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontWeight: '700',
-    fontSize: 9,
-  },
-  chipsSubtitle: {
-    ...typography.labelCapsXs,
-    color: colors.primary,
-    fontWeight: '700',
-    fontSize: 8.5,
+    fontWeight: '600',
+    fontSize: 12,
+    paddingHorizontal: 2,
   },
   chipsRow: {
     flexDirection: 'row',
@@ -550,23 +501,55 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: radii.full,
   },
-  emergencyChip: {
-    backgroundColor: colors.errorContainer,
-  },
   chipDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
   },
   chipText: {
-    ...typography.labelCapsMd,
+    ...typography.bodySm,
     color: colors.onSurface,
-    fontSize: 10,
-    textTransform: 'none',
+    fontSize: 12,
   },
   conversationList: {
-    gap: 14,
-    marginTop: 4,
+    gap: 12,
+    marginTop: 2,
+  },
+  convoHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  convoTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  demoPill: {
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.full,
+  },
+  demoText: {
+    ...typography.labelCapsXs,
+    color: colors.onSurfaceVariant,
+    fontSize: 9,
+    textTransform: 'none',
+  },
+  demoPillSmall: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radii.full,
+  },
+  demoTextSmall: {
+    ...typography.labelCapsXs,
+    color: colors.onSurfaceVariant,
+    fontSize: 8,
+    textTransform: 'none',
   },
   messageRow: {
     gap: 4,
@@ -579,7 +562,7 @@ const styles = StyleSheet.create({
   auraMessageRow: {
     alignItems: 'flex-start',
     alignSelf: 'flex-start',
-    maxWidth: '92%',
+    maxWidth: '94%',
   },
   msgHeader: {
     flexDirection: 'row',
@@ -590,7 +573,7 @@ const styles = StyleSheet.create({
   msgSender: {
     ...typography.labelCapsXs,
     fontWeight: '700',
-    fontSize: 9,
+    fontSize: 10,
   },
   msgTime: {
     ...typography.dataMono,
@@ -599,7 +582,7 @@ const styles = StyleSheet.create({
   },
   msgBubble: {
     borderRadius: radii.lg,
-    padding: spacing.spaceMd,
+    padding: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -617,7 +600,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: radii.sm,
     borderWidth: 1,
     borderColor: 'rgba(30, 41, 59, 0.6)',
-    gap: 10,
+    gap: 8,
   },
   msgBodyText: {
     ...typography.bodyMd,
@@ -632,11 +615,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(35, 42, 57, 0.75)',
     padding: 10,
     borderRadius: radii.md,
+    gap: 8,
   },
   widgetLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
   },
   widgetIconBox: {
     width: 28,
@@ -647,70 +632,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   widgetLabel: {
-    ...typography.labelCapsXs,
-    color: colors.onSurfaceVariant,
-    fontSize: 8.5,
+    ...typography.bodySm,
+    color: colors.onSurface,
+    fontWeight: '600',
+    fontSize: 12,
   },
   widgetVal: {
-    ...typography.headlineMetricMobile,
-    color: colors.onSurface,
+    color: colors.primary,
     fontWeight: '700',
-    fontSize: 15,
   },
-  widgetRight: {
-    alignItems: 'flex-end',
-  },
-  targetStrainLabel: {
-    ...typography.labelCapsXs,
-    color: colors.tertiary,
-    fontSize: 8,
-  },
-  targetStrainVal: {
-    ...typography.dataMono,
+  widgetSuggestion: {
+    ...typography.bodySm,
     color: colors.secondary,
-    fontWeight: '700',
     fontSize: 11,
+    marginTop: 1,
   },
   bottomDock: {
     paddingHorizontal: spacing.margin,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 80,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 74,
     paddingTop: 6,
     backgroundColor: colors.background,
+    gap: 4,
   },
   inputConsole: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.surfaceContainerHigh,
     borderRadius: radii.full,
-    paddingHorizontal: 8,
+    paddingHorizontal: 12,
     paddingVertical: 5,
     gap: 6,
     borderWidth: 1,
     borderColor: 'rgba(76, 215, 246, 0.25)',
   },
-  attachBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   textInput: {
     flex: 1,
     ...typography.bodySm,
     color: colors.onSurface,
-    fontSize: 12.5,
-  },
-  audioBars: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 2,
-    paddingHorizontal: 4,
-  },
-  audioBar: {
-    width: 3,
-    borderRadius: 1.5,
-    backgroundColor: colors.primary,
+    fontSize: 13,
   },
   sendBtn: {
     width: 34,
@@ -724,5 +683,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 8,
     elevation: 3,
+  },
+  bottomDisclaimer: {
+    ...typography.labelCapsXs,
+    color: colors.outline,
+    fontSize: 10,
+    textAlign: 'center',
+    textTransform: 'none',
+    marginTop: 2,
   },
 });

@@ -37,27 +37,27 @@ export default function ProfileScreen() {
     setIsSyncing(true);
     await DataService.triggerWatchSync();
     setIsSyncing(false);
-    Alert.alert('Synchronized', 'Watch streams and telemetry successfully updated.');
+    Alert.alert('Synchronized', 'Watch data successfully updated.');
   };
 
   const handleToggleSetting = (key: keyof TelemetrySettings, value: boolean) => {
     DataService.updateSettings({ [key]: value });
   };
 
-  const handleExportDossier = () => {
+  const handleExportData = () => {
     Alert.alert(
-      'Export Health Dossier',
-      'Clinical PDF and FHIR JSON health package generated and encrypted with zero-knowledge keys.'
+      'Export my data',
+      'Your health data has been prepared for CSV download.'
     );
   };
 
   const handleLogout = () => {
     Alert.alert(
-      'Logout & Revoke Link',
-      'Are you sure you want to disconnect from this device?',
+      'Log out',
+      'Are you sure you want to log out on this device?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Logout', style: 'destructive', onPress: () => router.replace('/(auth)/login') },
+        { text: 'Log out', style: 'destructive', onPress: () => router.replace('/(auth)/login') },
       ]
     );
   };
@@ -70,29 +70,21 @@ export default function ProfileScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Top Diagnostic Breadcrumb & Security Status */}
+        {/* Top Status */}
         <View style={styles.topBreadcrumbRow}>
           <View style={styles.breadcrumbLeft}>
             <View style={styles.pulseDot} />
-            <Text style={styles.breadcrumbText}>TWIN MODEL SYNCED & ENCRYPTED</Text>
-          </View>
-          <View style={styles.encryptionBadge}>
-            <MaterialIcons name="lock" size={12} color={colors.tertiary} />
-            <Text style={styles.encryptionText}>AES-256 GCM</Text>
+            <Text style={styles.breadcrumbText}>Data stays on this phone</Text>
           </View>
         </View>
 
-        {/* Section 1: User Identity & Digital Twin Calibration Card */}
+        {/* Section 1: User Identity */}
         <View style={styles.identityCard}>
           {/* Identity Header Row */}
           <View style={styles.identityHeader}>
             <View style={styles.avatarContainer}>
               <View style={styles.avatarBox}>
                 <MaterialIcons name="person" size={32} color={colors.onPrimary} />
-              </View>
-              <View style={styles.proBadge}>
-                <MaterialIcons name="verified" size={10} color={colors.tertiary} />
-                <Text style={styles.proText}>PRO</Text>
               </View>
             </View>
 
@@ -107,44 +99,19 @@ export default function ProfileScreen() {
                   <MaterialIcons name="edit" size={16} color={colors.onSurfaceVariant} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.userIdText}>ID: {profile.id} • Biological Twin Pro</Text>
-            </View>
-          </View>
-
-          {/* Chronological vs Biological Age Differential Display */}
-          <View style={styles.longevityMatrix}>
-            <View style={styles.matrixHeader}>
-              <Text style={styles.matrixTitle}>TWIN LONGEVITY MATRIX</Text>
-              <View style={styles.rejuvenationPill}>
-                <MaterialIcons name="trending-down" size={13} color={colors.tertiary} />
-                <Text style={styles.rejuvenationText}>-{profile.rejuvenationYears} yrs Rejuvenation</Text>
-              </View>
-            </View>
-
-            <View style={styles.ageGrid}>
-              <View style={styles.ageBox}>
-                <Text style={styles.ageLabel}>CHRONOLOGICAL AGE</Text>
-                <View style={styles.ageValRow}>
-                  <Text style={styles.ageVal}>{profile.chronologicalAge}</Text>
-                  <Text style={styles.ageUnit}>yrs</Text>
-                </View>
-              </View>
-
-              <View style={[styles.ageBox, styles.bioAgeBox]}>
-                <View style={styles.bioAgeHeader}>
-                  <Text style={[styles.ageLabel, { color: colors.primary }]}>BIO-TWIN AGE</Text>
-                  <View style={styles.bioPingDot} />
-                </View>
-                <View style={styles.ageValRow}>
-                  <Text style={[styles.ageVal, { color: colors.primary }]}>{profile.bioTwinAge}</Text>
-                  <Text style={[styles.ageUnit, { color: colors.primary }]}>yrs</Text>
-                </View>
-              </View>
             </View>
           </View>
 
           {/* Physical Baseline Metrics Grid */}
           <View style={styles.baselineGrid}>
+            <View style={styles.baselinePod}>
+              <Text style={styles.baselineLabel}>AGE</Text>
+              <View style={styles.baselineValRow}>
+                <Text style={styles.baselineVal}>{profile.chronologicalAge}</Text>
+                <Text style={styles.baselineUnit}>yrs</Text>
+              </View>
+            </View>
+
             <View style={styles.baselinePod}>
               <Text style={styles.baselineLabel}>HEIGHT</Text>
               <View style={styles.baselineValRow}>
@@ -162,7 +129,7 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.baselinePod}>
-              <Text style={styles.baselineLabel}>RESTING MR</Text>
+              <Text style={styles.baselineLabel}>EST. CALORIES/DAY</Text>
               <View style={styles.baselineValRow}>
                 <Text style={styles.baselineVal}>{profile.restingMrKcal.toLocaleString()}</Text>
                 <Text style={styles.baselineUnit}>kcal</Text>
@@ -171,17 +138,17 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Section 2: Connected Hardware & Sensor Ecosystem */}
+        {/* Section 2: Connected Device */}
         <View style={styles.sectionBlock}>
           <View style={styles.sectionHeaderRow}>
             <View style={styles.sectionTitleGroup}>
               <MaterialIcons name="watch" size={18} color={colors.secondary} />
-              <Text style={styles.sectionHeaderTitle}>HARDWARE & TELEMETRY STREAMS</Text>
+              <Text style={styles.sectionHeaderTitle}>Connected Device</Text>
             </View>
-            <Text style={styles.devicesOnlineText}>2 Devices Online</Text>
+            <Text style={styles.devicesOnlineText}>1 device</Text>
           </View>
 
-          {/* Noise ColorFit Watch Card */}
+          {/* Watch Card */}
           <View style={styles.hardwareCard}>
             <View style={styles.deviceRow}>
               <View style={styles.deviceLeft}>
@@ -190,7 +157,7 @@ export default function ProfileScreen() {
                 </View>
                 <View>
                   <Text style={styles.deviceName}>{watch.name}</Text>
-                  <Text style={styles.deviceSub}>{watch.connectionType} • {watch.bleVersion}</Text>
+                  <Text style={styles.deviceSub}>Noise ColorFit Watch - Health Connect</Text>
                 </View>
               </View>
 
@@ -229,19 +196,19 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Sensor Telemetry Toggles Stack */}
+            {/* Sensor List */}
             <View style={styles.togglesStack}>
-              <Text style={styles.togglesHeader}>AUTONOMOUS BIO-SENSORS</Text>
+              <Text style={styles.togglesHeader}>SENSORS</Text>
 
-              {/* 1. Optical PPG */}
+              {/* 1. Heart Rate */}
               <View style={styles.toggleItem}>
                 <View style={styles.toggleItemLeft}>
                   <View style={styles.toggleIcon}>
                     <MaterialIcons name="timeline" size={16} color={colors.primary} />
                   </View>
                   <View>
-                    <Text style={styles.toggleItemTitle}>Continuous Optical PPG</Text>
-                    <Text style={styles.toggleItemSub}>Real-time Heart Rate & HRV (60-80 bpm)</Text>
+                    <Text style={styles.toggleItemTitle}>Heart Rate</Text>
+                    <Text style={styles.toggleItemSub}>Heart rate and HRV</Text>
                   </View>
                 </View>
                 <Switch
@@ -252,34 +219,15 @@ export default function ProfileScreen() {
                 />
               </View>
 
-              {/* 2. EDA Sensor */}
-              <View style={styles.toggleItem}>
-                <View style={styles.toggleItemLeft}>
-                  <View style={styles.toggleIcon}>
-                    <MaterialIcons name="waves" size={16} color={colors.primary} />
-                  </View>
-                  <View>
-                    <Text style={styles.toggleItemTitle}>EDA Electrodermal Sensor</Text>
-                    <Text style={styles.toggleItemSub}>Sympathetic Galvanic Stress</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={settings.edaSensor}
-                  onValueChange={(val) => handleToggleSetting('edaSensor', val)}
-                  trackColor={{ false: colors.surfaceContainerHighest, true: colors.primaryContainer }}
-                  thumbColor={settings.edaSensor ? colors.primary : colors.outline}
-                />
-              </View>
-
-              {/* 3. SpO2 Sensor */}
+              {/* 2. Blood Oxygen (SpO2) */}
               <View style={styles.toggleItem}>
                 <View style={styles.toggleItemLeft}>
                   <View style={styles.toggleIcon}>
                     <MaterialIcons name="bloodtype" size={16} color={colors.primary} />
                   </View>
                   <View>
-                    <Text style={styles.toggleItemTitle}>Pulse Oximetry (SpO2)</Text>
-                    <Text style={styles.toggleItemSub}>Continuous Nocturnal Saturation</Text>
+                    <Text style={styles.toggleItemTitle}>Blood Oxygen (SpO2)</Text>
+                    <Text style={styles.toggleItemSub}>Continuous saturation readings</Text>
                   </View>
                 </View>
                 <Switch
@@ -293,15 +241,15 @@ export default function ProfileScreen() {
                 />
               </View>
 
-              {/* 4. Accelerometer */}
+              {/* 3. Sleep & Movement */}
               <View style={styles.toggleItem}>
                 <View style={styles.toggleItemLeft}>
                   <View style={styles.toggleIcon}>
                     <MaterialIcons name="directions-walk" size={16} color={colors.primary} />
                   </View>
                   <View>
-                    <Text style={styles.toggleItemTitle}>Tri-Axial Accelerometer</Text>
-                    <Text style={styles.toggleItemSub}>Sleep Architecture & Kinematics</Text>
+                    <Text style={styles.toggleItemTitle}>Sleep & Movement</Text>
+                    <Text style={styles.toggleItemSub}>Daily steps and sleep tracking</Text>
                   </View>
                 </View>
                 <Switch
@@ -314,7 +262,7 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* Health Connect Sync Row (Fix 1: Description & Chip text) */}
+          {/* Health Connect Service Row */}
           <View style={styles.healthConnectRow}>
             <View style={styles.healthConnectLeft}>
               <View style={styles.healthConnectIcon}>
@@ -332,25 +280,25 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Section 3: App & Twin Preferences */}
+        {/* Section 3: Settings */}
         <View style={styles.sectionBlock}>
           <View style={styles.sectionHeaderRow}>
             <View style={styles.sectionTitleGroup}>
               <MaterialIcons name="tune" size={18} color={colors.secondary} />
-              <Text style={styles.sectionHeaderTitle}>TWIN COMPUTATION & INTERFACE</Text>
+              <Text style={styles.sectionHeaderTitle}>Settings</Text>
             </View>
           </View>
 
           <View style={styles.cardBox}>
-            {/* Language Selection */}
+            {/* Language */}
             <View style={styles.prefRow}>
               <View style={styles.prefLeft}>
                 <View style={styles.prefIcon}>
                   <MaterialIcons name="language" size={18} color={colors.onSurface} />
                 </View>
                 <View>
-                  <Text style={styles.prefTitle}>Language Matrix</Text>
-                  <Text style={styles.prefSub}>Diagnostic terms vocabulary</Text>
+                  <Text style={styles.prefTitle}>Language</Text>
+                  <Text style={styles.prefSub}>App language</Text>
                 </View>
               </View>
               <View style={styles.prefPill}>
@@ -359,14 +307,14 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            {/* Notification Controls */}
+            {/* Alerts */}
             <View style={styles.alertsBlock}>
-              <Text style={styles.togglesHeader}>PREDICTIVE TELEMETRY ALERTS</Text>
+              <Text style={styles.togglesHeader}>ALERTS</Text>
 
               <View style={styles.alertToggleRow}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
-                  <Text style={styles.alertTitle}>Biometric Anomaly Push Alerts</Text>
-                  <Text style={styles.alertSub}>Instant triage notifications on sudden HRV or SpO2 drops</Text>
+                  <Text style={styles.alertTitle}>Unusual reading alerts</Text>
+                  <Text style={styles.alertSub}>Notify me when heart rate or SpO2 looks unusual</Text>
                 </View>
                 <Switch
                   value={settings.anomalyPush}
@@ -378,8 +326,8 @@ export default function ProfileScreen() {
 
               <View style={styles.alertToggleRow}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
-                  <Text style={styles.alertTitle}>Circadian Wind-Down Reminders</Text>
-                  <Text style={styles.alertSub}>Autonomous alerts 90 minutes prior to optimal sleep gate</Text>
+                  <Text style={styles.alertTitle}>Bedtime reminder</Text>
+                  <Text style={styles.alertSub}>Reminder before your scheduled bedtime</Text>
                 </View>
                 <Switch
                   value={settings.circadianReminders}
@@ -391,8 +339,8 @@ export default function ProfileScreen() {
 
               <View style={styles.alertToggleRow}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
-                  <Text style={styles.alertTitle}>Daily Twin Health Digest</Text>
-                  <Text style={styles.alertSub}>Morning metabolic summary & systemic readiness score</Text>
+                  <Text style={styles.alertTitle}>Daily summary</Text>
+                  <Text style={styles.alertSub}>Morning summary of your sleep and activity</Text>
                 </View>
                 <Switch
                   value={settings.dailyDigest}
@@ -405,57 +353,53 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Section 4: Data Privacy & Compliance (Fix 2) */}
+        {/* Section 4: Privacy */}
         <View style={styles.sectionBlock}>
           <View style={styles.sectionHeaderRow}>
             <View style={styles.sectionTitleGroup}>
               <MaterialIcons name="verified-user" size={18} color={colors.secondary} />
-              <Text style={styles.sectionHeaderTitle}>COMPLIANCE & DATA SOVEREIGNTY</Text>
+              <Text style={styles.sectionHeaderTitle}>Privacy</Text>
             </View>
           </View>
 
           <View style={styles.cardBox}>
-            {/* Fix 2: One sentence only */}
             <View style={styles.privacyBox}>
               <View style={styles.privacyIcon}>
-                <MaterialIcons name="health-and-safety" size={22} color={colors.tertiary} />
+                <MaterialIcons name="shield" size={22} color={colors.tertiary} />
               </View>
               <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={styles.privacyTitle}>HIPAA & GDPR Compliant</Text>
-                  <MaterialIcons name="check-circle" size={14} color={colors.tertiary} />
-                </View>
+                <Text style={styles.privacyTitle}>Private by design</Text>
                 <Text style={styles.privacySentence}>All your data stays on this phone.</Text>
               </View>
             </View>
 
-            {/* Action: Export Health Dossier */}
+            {/* Action: Export my data */}
             <TouchableOpacity
               style={styles.dossierBtn}
-              onPress={handleExportDossier}
+              onPress={handleExportData}
               activeOpacity={0.8}
             >
               <View style={styles.dossierLeft}>
                 <MaterialIcons name="description" size={20} color={colors.primary} />
                 <View>
-                  <Text style={styles.dossierTitle}>Export Health Dossier</Text>
-                  <Text style={styles.dossierSub}>Standardized Clinical PDF & FHIR JSON</Text>
+                  <Text style={styles.dossierTitle}>Export my data</Text>
+                  <Text style={styles.dossierSub}>Download as CSV</Text>
                 </View>
               </View>
               <MaterialIcons name="download" size={18} color={colors.onSurfaceVariant} />
             </TouchableOpacity>
 
-            {/* Action: Medical Consent */}
+            {/* Action: Medical Disclaimer */}
             <TouchableOpacity
               style={styles.dossierBtn}
-              onPress={() => Alert.alert('Medical Disclaimer', 'Computational Model Rev 4.19. For information only, not medical advice.')}
+              onPress={() => Alert.alert('Medical disclaimer', 'For information only, not medical advice. Consult a healthcare professional for clinical concerns.')}
               activeOpacity={0.8}
             >
               <View style={styles.dossierLeft}>
                 <MaterialIcons name="policy" size={20} color={colors.secondary} />
                 <View>
-                  <Text style={styles.dossierTitle}>Medical Disclaimer & Protocol Consent</Text>
-                  <Text style={styles.dossierSub}>Computational Model Rev 4.19</Text>
+                  <Text style={styles.dossierTitle}>Medical disclaimer</Text>
+                  <Text style={styles.dossierSub}>For information only, not medical advice</Text>
                 </View>
               </View>
               <MaterialIcons name="chevron-right" size={18} color={colors.onSurfaceVariant} />
@@ -463,7 +407,7 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Section 5: Account Termination & Revocation */}
+        {/* Section 5: Logout */}
         <View style={styles.logoutSection}>
           <TouchableOpacity
             style={styles.logoutBtn}
@@ -471,9 +415,9 @@ export default function ProfileScreen() {
             activeOpacity={0.8}
           >
             <MaterialIcons name="power-settings-new" size={18} color={colors.error} />
-            <Text style={styles.logoutText}>Logout & Revoke Twin Link</Text>
+            <Text style={styles.logoutText}>Log out</Text>
           </TouchableOpacity>
-          <Text style={styles.kernelText}>KERNEL BUILD: v4.12.08-BIO-PROD</Text>
+          <Text style={styles.kernelText}>AI-Driven Human v1.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -509,20 +453,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.tertiary,
   },
   breadcrumbText: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.secondary,
-    fontWeight: '700',
-    letterSpacing: 0.9,
-  },
-  encryptionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  encryptionText: {
-    ...typography.dataMono,
-    color: colors.onSurfaceVariant,
-    fontSize: 10,
+    fontWeight: '600',
+    fontSize: 12,
   },
   identityCard: {
     backgroundColor: colors.surfaceContainer,
@@ -541,9 +475,9 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   avatarBox: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -552,26 +486,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 4,
-  },
-  proBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: colors.surfaceContainerLow,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: radii.full,
-    borderWidth: 1,
-    borderColor: 'rgba(69, 223, 164, 0.4)',
-  },
-  proText: {
-    ...typography.labelCapsXs,
-    color: colors.tertiary,
-    fontSize: 8,
-    fontWeight: '700',
   },
   identityInfo: {
     flex: 1,
@@ -586,7 +500,7 @@ const styles = StyleSheet.create({
     ...typography.titleMd,
     color: colors.onSurface,
     fontWeight: '700',
-    fontSize: 18,
+    fontSize: 20,
   },
   editBtn: {
     width: 32,
@@ -595,91 +509,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceContainerHigh,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  userIdText: {
-    ...typography.dataMono,
-    color: colors.onSurfaceVariant,
-    fontSize: 11,
-  },
-  longevityMatrix: {
-    backgroundColor: 'rgba(7, 14, 28, 0.75)',
-    borderRadius: radii.lg,
-    padding: spacing.spaceSm,
-    gap: 8,
-  },
-  matrixHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  matrixTitle: {
-    ...typography.labelCapsXs,
-    color: colors.onSurfaceVariant,
-    fontSize: 9,
-  },
-  rejuvenationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(69, 223, 164, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radii.full,
-  },
-  rejuvenationText: {
-    ...typography.dataMono,
-    color: colors.tertiary,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  ageGrid: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  ageBox: {
-    flex: 1,
-    backgroundColor: 'rgba(35, 42, 57, 0.6)',
-    padding: 10,
-    borderRadius: radii.md,
-    gap: 2,
-  },
-  bioAgeBox: {
-    backgroundColor: 'rgba(76, 215, 246, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(76, 215, 246, 0.25)',
-  },
-  bioAgeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  bioPingDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.primary,
-  },
-  ageLabel: {
-    ...typography.labelCapsXs,
-    color: colors.onSurfaceVariant,
-    fontSize: 8.5,
-  },
-  ageValRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 3,
-    marginTop: 2,
-  },
-  ageVal: {
-    ...typography.headlineMetricMobile,
-    color: colors.onSurface,
-    fontWeight: '700',
-    fontSize: 22,
-  },
-  ageUnit: {
-    ...typography.bodySm,
-    color: colors.onSurfaceVariant,
-    fontSize: 11,
   },
   baselineGrid: {
     flexDirection: 'row',
@@ -696,7 +525,8 @@ const styles = StyleSheet.create({
   baselineLabel: {
     ...typography.labelCapsXs,
     color: colors.onSurfaceVariant,
-    fontSize: 8.5,
+    fontSize: 8,
+    textAlign: 'center',
   },
   baselineValRow: {
     flexDirection: 'row',
@@ -707,12 +537,12 @@ const styles = StyleSheet.create({
     ...typography.dataMono,
     color: colors.onSurface,
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 13,
   },
   baselineUnit: {
     ...typography.dataMono,
     color: colors.onSurfaceVariant,
-    fontSize: 9.5,
+    fontSize: 9,
   },
   sectionBlock: {
     gap: 10,
@@ -729,15 +559,15 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   sectionHeaderTitle: {
-    ...typography.labelCapsMd,
-    color: colors.onSurfaceVariant,
-    fontSize: 10.5,
-    letterSpacing: 0.8,
+    ...typography.titleMd,
+    color: colors.onSurface,
+    fontWeight: '600',
+    fontSize: 15,
   },
   devicesOnlineText: {
     ...typography.dataMono,
     color: colors.tertiary,
-    fontSize: 10,
+    fontSize: 11,
   },
   hardwareCard: {
     backgroundColor: colors.surfaceContainer,
@@ -855,7 +685,7 @@ const styles = StyleSheet.create({
   togglesHeader: {
     ...typography.labelCapsXs,
     color: colors.onSurfaceVariant,
-    fontSize: 8.5,
+    fontSize: 9,
     letterSpacing: 0.8,
   },
   toggleItem: {
@@ -885,13 +715,12 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     color: colors.onSurface,
     fontWeight: '600',
-    fontSize: 12.5,
+    fontSize: 13,
   },
   toggleItemSub: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 8.5,
-    textTransform: 'none',
+    fontSize: 11,
   },
   healthConnectRow: {
     flexDirection: 'row',
@@ -922,9 +751,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   healthConnectDesc: {
-    ...typography.dataMono,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 10.5,
+    fontSize: 11,
   },
   healthConnectChip: {
     flexDirection: 'row',
@@ -981,10 +810,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   prefSub: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 9,
-    textTransform: 'none',
+    fontSize: 11,
   },
   prefPill: {
     flexDirection: 'row',
@@ -996,9 +824,9 @@ const styles = StyleSheet.create({
     borderRadius: radii.full,
   },
   prefPillText: {
-    ...typography.dataMono,
+    ...typography.bodySm,
     color: colors.secondary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
   },
   alertsBlock: {
@@ -1017,10 +845,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   alertSub: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 9,
-    textTransform: 'none',
+    fontSize: 11,
     marginTop: 1,
   },
   privacyBox: {
@@ -1028,7 +855,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     backgroundColor: colors.surfaceContainerLow,
-    padding: 10,
+    padding: 12,
     borderRadius: radii.md,
   },
   privacyIcon: {
@@ -1043,13 +870,12 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     color: colors.onSurface,
     fontWeight: '700',
-    fontSize: 13,
+    fontSize: 14,
   },
   privacySentence: {
-    ...typography.labelCapsXs,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 9.5,
-    textTransform: 'none',
+    fontSize: 11,
     marginTop: 1,
   },
   dossierBtn: {
@@ -1073,9 +899,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   dossierSub: {
-    ...typography.dataMono,
+    ...typography.bodySm,
     color: colors.onSurfaceVariant,
-    fontSize: 9.5,
+    fontSize: 11,
   },
   logoutSection: {
     alignItems: 'center',
@@ -1094,11 +920,12 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     color: colors.error,
     fontWeight: '700',
+    fontSize: 14,
   },
   kernelText: {
     ...typography.dataMono,
     color: colors.onSurfaceVariant,
-    fontSize: 9,
+    fontSize: 11,
     opacity: 0.7,
   },
 });

@@ -74,7 +74,7 @@ export default function ProfileSetupScreen() {
             <View style={styles.bentoGrid}>
               <View style={styles.bentoCard}>
                 <Text style={styles.bentoLabel}>Profile Identity</Text>
-                <Text style={styles.bentoVal}>{name || 'Alex Vance'}</Text>
+                <Text style={styles.bentoVal}>{name || 'Dark'}</Text>
                 <Text style={styles.bentoSubId}>ID: #SYN-89410</Text>
               </View>
 
@@ -117,7 +117,7 @@ export default function ProfileSetupScreen() {
                 style={styles.fieldInput}
                 value={name}
                 onChangeText={setName}
-                placeholder="Alex Vance"
+                placeholder="Dark"
                 placeholderTextColor={colors.outline}
               />
             </View>
