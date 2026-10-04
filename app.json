@@ -7,9 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "ai-driven-human",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "backgroundColor": "#0c1321"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.aidrivenhuman.app"
@@ -20,14 +17,33 @@
         "backgroundColor": "#0c1321",
         "foregroundImage": "./assets/android-icon-foreground.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_STEPS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "plugins": [
-      "expo-router"
-    ]
+      "expo-router",
+      "react-native-health-connect",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6b148e34-39be-49b8-b621-6ed74c51802c"
+      }
+    }
   }
 }

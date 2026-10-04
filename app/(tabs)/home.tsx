@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
-import { ScrollView, View, Text, Pressable, StyleSheet } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ScrollView, View, Text, Pressable, StyleSheet, RefreshControl } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { MaterialCommunityIcons as Icon } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import AppHeader from '../../components/AppHeader';
 import ScoreRing from '../../components/ScoreRing';
 import { colors, radius, space, type } from '../../theme/tokens';
-
-// Mock health state matching the design
-const d = { score: 78, hr: 72, rhr: 64, sleep: '6h 40m', steps: 5840, goal: 10000, kcal: 280, stress: 38 };
+import { getCurrentVitals, CurrentVitals } from '../../src/services/vitals';
+import {
+  getTodaySteps,
+  getTodayHeartRates,
+  StepsDataPoint,
+  HeartRateDataPoint,
+} from '../../src/services/healthConnect';
 
 function Tag({ text, color }: { text: string; color: string }) {
   return (
@@ -17,125 +22,342 @@ function Tag({ text, color }: { text: string; color: string }) {
   );
 }
 
-function CardHead({ icon, color, label, tag, tagColor }: { icon: any; color: string; label: string; tag?: string; tagColor?: string }) {
+function CardHead({
+  icon,
+  color,
+  label,
+  tag,
+  tagColor,
+}: {
+  icon: any;
+  color: string;
+  label: string;
+  tag?: string;
+  tagColor?: string;
+}) {
   return (
     <View style={s.cardHead}>
       <View style={s.row}>
         <Icon name={icon} size={18} color={color} />
         <Text style={s.cardLabel}>{label}</Text>
       </View>
-      {tag ? <Tag text={tag} color={tagColor!} /> : null}
+      {tag ? <Tag text={tag} color={tagColor || colors.green} /> : null}
     </View>
   );
 }
 
+function formatTimestamp(isoString?: string | null): string {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return '';
+  const now = new Date();
+  const isToday =
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const formattedHour = hours % 12 || 12;
+  const timeStr = `${formattedHour}:${minutes} ${ampm}`;
+
+  if (isToday) {
+    return timeStr;
+  }
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${monthNames[date.getMonth()]} ${date.getDate()}, ${timeStr}`;
+}
+
+function formatSyncHeader(
+  vitals: CurrentVitals | null,
+  stepsData: StepsDataPoint | null
+): string {
+  let latestTs: string | null = vitals?.latestTimestamp || null;
+  let source: string | null = vitals?.latestSource || null;
+
+  if (stepsData?.lastUpdated) {
+    if (!latestTs || new Date(stepsData.lastUpdated).getTime() > new Date(latestTs).getTime()) {
+      latestTs = stepsData.lastUpdated;
+      source = 'Phone';
+    }
+  }
+
+  if (!latestTs) {
+    return 'No data yet';
+  }
+
+  const diffMinutes = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(latestTs).getTime()) / (60 * 1000))
+  );
+  if (diffMinutes < 10) {
+    const timeAgo = diffMinutes <= 1 ? 'Just now' : `${diffMinutes}m ago`;
+    return `${source || 'Watch'} • Synced ${timeAgo}`;
+  }
+  return `Last reading: ${formatTimestamp(latestTs)}`;
+}
+
 export default function Home() {
-  const [showAlert, setShowAlert] = useState(true);
+  const [vitals, setVitals] = useState<CurrentVitals | null>(null);
+  const [stepsData, setStepsData] = useState<StepsDataPoint | null>(null);
+  const [todayHeartRates, setTodayHeartRates] = useState<HeartRateDataPoint[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [vitalsRes, stepsRes, hrHistoryRes] = await Promise.all([
+        getCurrentVitals(),
+        getTodaySteps(),
+        getTodayHeartRates(),
+      ]);
+      setVitals(vitalsRes);
+      setStepsData(stepsRes);
+      setTodayHeartRates(hrHistoryRes);
+    } catch (err) {
+      console.warn('[HomeScreen] Failed to fetch real data:', err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  // 1. Initial mount and periodic 60-second refresh
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 60000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  // 2. Refresh whenever the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadData();
+  }, [loadData]);
+
   const now = new Date();
   const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
   const h = now.getHours();
   const greeting = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 
+  // Heart Rate calculations
+  const hr = vitals?.heartRate;
+  const hrValue = hr ? `${hr.value}` : 'No data yet';
+  const hrIsElevated = hr ? hr.value > 100 : false;
+  const hrIsLow = hr ? hr.value < 60 : false;
+  const hrTag = !hr
+    ? 'No data'
+    : hrIsElevated
+    ? 'Elevated'
+    : hrIsLow
+    ? 'Low'
+    : 'Normal';
+  const hrTagColor = !hr
+    ? colors.outline
+    : hrIsElevated
+    ? colors.amber
+    : colors.green;
+  const hrSubText = hr
+    ? `${hr.source} • ${formatTimestamp(hr.timestamp)}`
+    : 'Awaiting readings';
+
+  // Generate SVG path for mini heart rate chart if >= 2 points
+  let chartPath = '';
+  let lastCirclePos = { cx: 0, cy: 0 };
+  const hasChart = todayHeartRates && todayHeartRates.length >= 2;
+
+  if (hasChart) {
+    const minBpm = Math.min(...todayHeartRates.map((d) => d.bpm)) - 5;
+    const maxBpm = Math.max(...todayHeartRates.map((d) => d.bpm)) + 5;
+    const range = Math.max(10, maxBpm - minBpm);
+
+    const points = todayHeartRates.map((pt, idx) => {
+      const x = (idx / (todayHeartRates.length - 1)) * 120;
+      const y = 26 - ((pt.bpm - minBpm) / range) * 22;
+      return { x, y };
+    });
+
+    chartPath = points
+      .map((p, i) => (i === 0 ? `M${p.x.toFixed(1)},${p.y.toFixed(1)}` : `L${p.x.toFixed(1)},${p.y.toFixed(1)}`))
+      .join(' ');
+
+    const last = points[points.length - 1];
+    lastCirclePos = { cx: last.x, cy: last.y };
+  }
+
+  // Steps calculations
+  const stepCount = stepsData?.count ?? null;
+  const stepGoal = 10000;
+  const stepPercent = stepCount !== null ? Math.min(100, Math.round((stepCount / stepGoal) * 100)) : 0;
+  const headerSync = formatSyncHeader(vitals, stepsData);
+
   return (
     <View style={s.screen}>
-      <AppHeader />
-      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+      <AppHeader syncText={headerSync} />
+
+      <ScrollView
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.teal}
+            colors={[colors.teal]}
+          />
+        }
+      >
         <View>
           <Text style={s.eyebrow}>{weekday} briefing</Text>
           <Text style={s.h1}>{greeting}, Dark</Text>
         </View>
 
-        {showAlert && (
-          <View style={s.card}>
-            <View style={s.alertRow}>
-              <View style={s.alertIcon}>
-                <Icon name="heart-outline" size={22} color={colors.amber} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={s.cardHead}>
-                  <Text style={[s.title, { flex: 1 }]} numberOfLines={1}>Resting heart rate notice</Text>
-                  <Tag text="Attention" color={colors.amberText} />
-                </View>
-                <Text style={s.body}>Your resting heart rate was higher than usual last night (74 bpm vs your normal 62 bpm). Make sure to stay hydrated today.</Text>
-                <View style={[s.row, { marginTop: space.md }]}>
-                  <Pressable style={s.btn}>
-                    <Text style={[s.label, { color: colors.primary }]}>Learn more</Text>
-                  </Pressable>
-                  <Pressable style={s.btnGhost} onPress={() => setShowAlert(false)}>
-                    <Text style={[s.label, { color: colors.outline }]}>Dismiss</Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
-
+        {/* Health Score Card with DEMO Tag */}
         <View style={[s.card, s.scoreCard]}>
           <View style={{ flex: 1 }}>
-            <Text style={s.overall}>Overall status</Text>
+            <View style={s.scoreHeadRow}>
+              <Text style={s.overall}>Overall status</Text>
+              <Tag text="Demo" color={colors.amber} />
+            </View>
             <Text style={s.h2}>Health score</Text>
-            <Text style={[s.bodySm, { marginVertical: space.sm }]}>Fairly good • Sleep was a little short</Text>
+            <Text style={[s.bodySm, { marginVertical: space.sm }]}>
+              Demo score • Risk model in training
+            </Text>
             <View style={s.pill}>
               <View style={s.pillDot} />
-              <Text style={[s.label, { color: colors.primary }]}>Optimal baseline</Text>
+              <Text style={[s.label, { color: colors.primary }]}>Baseline reference</Text>
             </View>
           </View>
-          <ScoreRing score={d.score} />
+          <ScoreRing score={78} />
         </View>
 
+        {/* 2x2 Telemetry Grid */}
         <View style={s.grid}>
+          {/* 1. Heart Rate Card */}
           <View style={s.cell}>
             <View>
-              <CardHead icon="heart-outline" color={colors.red} label="Heart rate" tag="Normal" tagColor={colors.green} />
-              <Text style={s.value}>{d.hr} <Text style={s.unit}>bpm</Text></Text>
-              <Text style={s.bodySm}>Resting: {d.rhr} bpm today</Text>
+              <CardHead
+                icon="heart-outline"
+                color={colors.red}
+                label="Heart rate"
+                tag={hrTag}
+                tagColor={hrTagColor}
+              />
+              <Text style={s.value}>
+                {hr ? hr.value : '--'}{' '}
+                {hr ? <Text style={s.unit}>bpm</Text> : null}
+              </Text>
+              <Text style={s.bodySm}>{hrSubText}</Text>
             </View>
-            <Svg height={40} width="100%" viewBox="0 0 120 30" preserveAspectRatio="none" style={{ marginTop: space.sm }}>
-              <Path d="M0,22 Q15,24 25,18 T50,20 T70,8 T90,16 T110,12 L120,15" fill="none" stroke={colors.primary} strokeWidth={2.5} strokeLinecap="round" />
-              <Circle cx="118" cy="15" r="3" fill={colors.primary} />
-            </Svg>
-          </View>
 
-          <View style={s.cell}>
-            <View>
-              <CardHead icon="weather-night" color={colors.amberText} label="Sleep" tag="Low" tagColor={colors.amberText} />
-              <Text style={s.value}>{d.sleep}</Text>
-              <View style={s.track}>
-                <View style={{ width: '19%', backgroundColor: colors.amberText }} />
-                <View style={{ width: '67%', backgroundColor: colors.primary }} />
-                <View style={{ width: '14%', backgroundColor: colors.cardHigh }} />
+            {hasChart ? (
+              <Svg
+                height={32}
+                width="100%"
+                viewBox="0 0 120 30"
+                preserveAspectRatio="none"
+                style={{ marginTop: space.sm }}
+              >
+                <Path
+                  d={chartPath}
+                  fill="none"
+                  stroke={colors.primary}
+                  strokeWidth={2.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <Circle
+                  cx={lastCirclePos.cx}
+                  cy={lastCirclePos.cy}
+                  r={3}
+                  fill={colors.primary}
+                />
+              </Svg>
+            ) : (
+              <View style={s.noChartBox}>
+                <Text style={s.noChartText}>
+                  {hr ? 'Awaiting more points' : 'No chart data yet'}
+                </Text>
               </View>
-            </View>
-            <Text style={s.labelSm}>Deep: 1h 15m • Light: 4h 30m • Awake: 55m</Text>
+            )}
           </View>
 
+          {/* 2. Sleep Card */}
           <View style={s.cell}>
             <View>
-              <CardHead icon="walk" color={colors.green} label="Steps" />
-              <Text style={s.value}>{d.steps.toLocaleString('en-US')}</Text>
-              <Text style={s.bodySm}>{d.kcal} kcal burned</Text>
+              <CardHead
+                icon="weather-night"
+                color={colors.amberText}
+                label="Sleep"
+                tag="Waiting"
+                tagColor={colors.amberText}
+              />
+              <Text style={[s.value, { fontSize: 16, lineHeight: 22, marginTop: 6 }]}>
+                Waiting for Aura's call
+              </Text>
+            </View>
+            <Text style={s.labelSm}>Sleep will come from the calling agent</Text>
+          </View>
+
+          {/* 3. Steps Card */}
+          <View style={s.cell}>
+            <View>
+              <CardHead
+                icon="walk"
+                color={colors.green}
+                label="Steps (phone)"
+                tag={stepCount !== null ? `${stepPercent}%` : undefined}
+                tagColor={colors.green}
+              />
+              <Text style={s.value}>
+                {stepCount !== null ? stepCount.toLocaleString('en-US') : 'No data yet'}
+              </Text>
+              <Text style={s.bodySm}>
+                {stepsData?.lastUpdated
+                  ? `Updated: ${formatTimestamp(stepsData.lastUpdated)}`
+                  : 'Awaiting step data'}
+              </Text>
             </View>
             <View style={{ marginTop: space.sm }}>
               <View style={s.track}>
-                <View style={{ width: `${(d.steps / d.goal) * 100}%`, backgroundColor: colors.green }} />
+                <View
+                  style={{
+                    width: `${stepPercent}%`,
+                    backgroundColor: colors.green,
+                  }}
+                />
               </View>
               <View style={[s.spread, { marginTop: 6 }]}>
                 <Text style={s.labelSm}>10,000 goal</Text>
-                <Text style={[s.labelSm, { color: colors.green }]}>{Math.round((d.steps / d.goal) * 100)}%</Text>
+                <Text style={[s.labelSm, { color: colors.green }]}>
+                  {stepCount !== null ? `${stepPercent}%` : '--'}
+                </Text>
               </View>
             </View>
           </View>
 
+          {/* 4. Stress Card */}
           <View style={s.cell}>
             <View>
-              <CardHead icon="spa-outline" color={colors.primary} label="Stress" tag="Mild" tagColor={colors.green} />
-              <Text style={s.value}>{d.stress} <Text style={s.unit}>/ 100</Text></Text>
-              <Text style={s.bodySm}>Mostly relaxed today</Text>
+              <CardHead
+                icon="spa-outline"
+                color={colors.primary}
+                label="Stress"
+                tag="Pending"
+                tagColor={colors.outline}
+              />
+              <Text style={[s.value, { fontSize: 18, lineHeight: 24, marginTop: 4 }]}>
+                No data yet
+              </Text>
+              <Text style={s.bodySm}>Stress will be estimated later</Text>
             </View>
             <View style={{ marginTop: space.sm }}>
-              <View style={[s.track, { backgroundColor: colors.green + '55' }]}>
-                <View style={{ position: 'absolute', left: `${d.stress - 2}%`, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.text }} />
-              </View>
+              <View style={[s.track, { backgroundColor: colors.cardHigh }]} />
               <View style={[s.spread, { marginTop: 6 }]}>
                 <Text style={s.labelSm}>Calm</Text>
                 <Text style={s.labelSm}>Peak</Text>
@@ -144,6 +366,7 @@ export default function Home() {
           </View>
         </View>
 
+        {/* Neutral Tip Card */}
         <View style={[s.card, s.alertRow]}>
           <View style={[s.alertIcon, { backgroundColor: colors.primary + '1a' }]}>
             <Icon name="lightbulb-on-outline" size={22} color={colors.primary} />
@@ -153,7 +376,9 @@ export default function Home() {
               <Text style={s.title}>Today's tip</Text>
               <Tag text="Recovery" color={colors.primary} />
             </View>
-            <Text style={s.body}>Take a 15-minute screen break before your afternoon class to help lower stress.</Text>
+            <Text style={s.body}>
+              Take a short walk or a 5-minute break to help lower stress.
+            </Text>
           </View>
         </View>
       </ScrollView>
@@ -175,21 +400,71 @@ const s = StyleSheet.create({
   card: { backgroundColor: colors.card, borderRadius: radius.md, padding: space.md },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   spread: { flexDirection: 'row', justifyContent: 'space-between' },
-  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, marginBottom: 6 },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+    marginBottom: 6,
+  },
   cardLabel: { ...type.label, color: colors.text },
   alertRow: { flexDirection: 'row', gap: space.sm, alignItems: 'flex-start' },
-  alertIcon: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: colors.amber + '26', alignItems: 'center', justifyContent: 'center' },
-  btn: { backgroundColor: colors.cardHigh, borderRadius: radius.sm, paddingVertical: 6, paddingHorizontal: 14 },
-  btnGhost: { paddingVertical: 6, paddingHorizontal: 12 },
+  alertIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.amber + '26',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   tag: { borderRadius: radius.full, paddingHorizontal: 8, paddingVertical: 2 },
   tagText: { ...type.labelSm },
   scoreCard: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  overall: { ...type.labelSm, color: colors.primary, marginBottom: 4 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: colors.teal + '1a', borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 4 },
+  scoreHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  overall: { ...type.labelSm, color: colors.primary },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.teal + '1a',
+    borderRadius: radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
   pillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.md },
-  cell: { width: '47.5%', flexGrow: 1, backgroundColor: colors.card, borderRadius: radius.md, padding: space.md, justifyContent: 'space-between', minHeight: 150 },
+  cell: {
+    width: '47.5%',
+    flexGrow: 1,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    padding: space.md,
+    justifyContent: 'space-between',
+    minHeight: 150,
+  },
   value: { ...type.headlineMd, color: colors.text, marginVertical: 4 },
   unit: { ...type.bodySm, color: colors.textDim, fontWeight: '400' },
-  track: { height: 8, borderRadius: 4, backgroundColor: colors.cardHigh, overflow: 'hidden', flexDirection: 'row', marginTop: 6, justifyContent: 'flex-start' },
+  track: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.cardHigh,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    marginTop: 6,
+    justifyContent: 'flex-start',
+  },
+  noChartBox: {
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.cardLow,
+    borderRadius: radius.sm,
+    marginTop: space.sm,
+  },
+  noChartText: {
+    ...type.labelSm,
+    color: colors.outline,
+    fontSize: 10,
+  },
 });
