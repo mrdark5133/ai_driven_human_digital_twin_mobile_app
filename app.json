@@ -19,6 +19,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "android.permission.RECORD_AUDIO",
         "android.permission.health.READ_HEART_RATE",
         "android.permission.health.READ_STEPS"
       ]
@@ -36,6 +37,20 @@
           "android": {
             "minSdkVersion": 26
           }
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow AI-Driven Human to use the microphone for voice conversations with AURA.",
+          "speechRecognitionPermission": "Allow AI-Driven Human to recognize speech for voice conversations with AURA.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ],
+      [
+        "llama.rn",
+        {
+          "enableOpenCL": true
         }
       ]
     ],

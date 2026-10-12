@@ -10,6 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { colors, spacing, radii, typography } from '../../theme';
@@ -77,9 +78,20 @@ export default function AssistantScreen() {
                 </View>
               </View>
 
-              <View style={styles.neuralPill}>
-                <MaterialIcons name="check-circle" size={13} color={colors.tertiary} />
-                <Text style={styles.neuralText}>Active</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity
+                  style={styles.callAuraBtn}
+                  onPress={() => router.push('/call')}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="call" size={13} color="#070e1c" />
+                  <Text style={styles.callAuraBtnText}>Call AURA</Text>
+                </TouchableOpacity>
+
+                <View style={styles.neuralPill}>
+                  <MaterialIcons name="check-circle" size={13} color={colors.tertiary} />
+                  <Text style={styles.neuralText}>Active</Text>
+                </View>
               </View>
             </View>
           </View>
@@ -365,6 +377,22 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     color: colors.onSurfaceVariant,
     fontSize: 11,
+  },
+  callAuraBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+  },
+  callAuraBtnText: {
+    ...typography.labelCapsXs,
+    color: '#070e1c',
+    fontWeight: '700',
+    fontSize: 10,
+    textTransform: 'none',
   },
   neuralPill: {
     flexDirection: 'row',
