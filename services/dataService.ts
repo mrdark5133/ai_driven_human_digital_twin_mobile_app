@@ -346,6 +346,19 @@ export const DataService = {
     return [...chatMessages];
   },
 
+  addChatMessage(msg: ChatMessage): void {
+    chatMessages.push(msg);
+    notify();
+  },
+
+  updateChatMessage(id: string, text: string): void {
+    const target = chatMessages.find((m) => m.id === id);
+    if (target) {
+      target.text = text;
+      notify();
+    }
+  },
+
   getSettings(): TelemetrySettings {
     return { ...settingsState };
   },

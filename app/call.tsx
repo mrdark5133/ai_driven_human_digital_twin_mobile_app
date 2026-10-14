@@ -9,15 +9,23 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, radius, space, type } from '../theme/tokens';
 import { isModelDownloaded, downloadModel, cancelModelDownload } from '../src/services/voice/modelManager';
-import { callAgent, CallAgentEvent } from '../src/services/voice/callAgent';
-import { getAsrLocale, setAsrLocale, AsrLocale } from '../src/services/voice/asr';
+import { callAgent, CallAgentEvent, MAX_TURNS } from '../src/services/voice/callAgent';
+import {
+  getAsrLocale,
+  setAsrLocale,
+  AsrLocale,
+  checkOfflineLocaleInstalled,
+  triggerOfflineModelDownload,
+} from '../src/services/voice/asr';
+import { CallSlotId } from '../src/config/callSchedule';
 
 export default function CallScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ slot?: CallSlotId; historyId?: string }>();
 
   // Model download state
   const [modelReady, setModelReady] = useState<boolean | null>(null);
@@ -25,6 +33,11 @@ export default function CallScreen() {
   const [downloadBytes, setDownloadBytes] = useState({ written: 0, total: 0 });
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // Offline speech pack state
+  const [isOfflineInstalled, setIsOfflineInstalled] = useState(true);
+  const [isDownloadingOffline, setIsDownloadingOffline] = useState(false);
+  const [offlineStatusMsg, setOfflineStatusMsg] = useState<string | null>(null);
 
   // Agent call state
   const [agentEvent, setAgentEvent] = useState<CallAgentEvent>({
@@ -39,6 +52,7 @@ export default function CallScreen() {
     },
     errorMessage: null,
     isMuted: false,
+    turnCount: 0,
   });
 
   const [currentLocale, setCurrentLocale] = useState<AsrLocale>(getAsrLocale());
@@ -46,7 +60,18 @@ export default function CallScreen() {
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // 1. Initial check for model file
+  // 1. Check offline language pack availability
+  useEffect(() => {
+    let active = true;
+    checkOfflineLocaleInstalled(currentLocale).then((installed) => {
+      if (active) setIsOfflineInstalled(installed);
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentLocale]);
+
+  // 2. Initial check for model file & start call
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -54,7 +79,10 @@ export default function CallScreen() {
       if (mounted) {
         setModelReady(ready);
         if (ready) {
-          callAgent.startCall();
+          callAgent.startCall({
+            slot: params.slot,
+            historyId: params.historyId,
+          });
         }
       }
     })();
@@ -71,9 +99,9 @@ export default function CallScreen() {
       callAgent.endCall();
       cancelModelDownload();
     };
-  }, []);
+  }, [params.slot, params.historyId]);
 
-  // 2. Continuous pulse animation based on state
+  // 3. Continuous pulse animation based on state
   useEffect(() => {
     let pulseLoop: Animated.CompositeAnimation | null = null;
 
@@ -122,6 +150,27 @@ export default function CallScreen() {
     };
   }, [agentEvent.state]);
 
+  // Handle Offline Speech Pack Download
+  const handleDownloadOfflinePack = async () => {
+    setIsDownloadingOffline(true);
+    setOfflineStatusMsg('Requesting offline speech pack...');
+    try {
+      const res = await triggerOfflineModelDownload(currentLocale);
+      setOfflineStatusMsg(res.message || 'Speech pack download initiated.');
+      setTimeout(async () => {
+        const installed = await checkOfflineLocaleInstalled(currentLocale);
+        setIsOfflineInstalled(installed);
+        setIsDownloadingOffline(false);
+        if (installed) {
+          setOfflineStatusMsg(null);
+        }
+      }, 3000);
+    } catch (err: any) {
+      setIsDownloadingOffline(false);
+      setOfflineStatusMsg(err?.message || 'Download request failed.');
+    }
+  };
+
   // Handle Model Download
   const handleStartDownload = async () => {
     setIsDownloading(true);
@@ -133,8 +182,10 @@ export default function CallScreen() {
       });
       setModelReady(true);
       setIsDownloading(false);
-      // Start call immediately after download completes
-      await callAgent.startCall();
+      await callAgent.startCall({
+        slot: params.slot,
+        historyId: params.historyId,
+      });
     } catch (err: any) {
       setIsDownloading(false);
       setDownloadError(err?.message || 'Download failed. Please check network connection.');
@@ -160,15 +211,14 @@ export default function CallScreen() {
     return (bytes / (1024 * 1024)).toFixed(1);
   };
 
-  // State color helper
   const getStateColor = () => {
     switch (agentEvent.state) {
       case 'listening':
-        return colors.teal; // Bright teal/cyan
+        return colors.teal;
       case 'thinking':
-        return colors.amber; // Warm amber
+        return colors.amber;
       case 'speaking':
-        return colors.green; // Bio-emerald
+        return colors.green;
       case 'error':
         return colors.red;
       default:
@@ -191,6 +241,14 @@ export default function CallScreen() {
     }
   };
 
+  const getSubtitle = () => {
+    if (params.slot) {
+      const slotName = params.slot === 'morning' ? 'Morning Check-in' : 'Evening Check-in';
+      return `Scheduled • ${slotName} • Turn ${agentEvent.turnCount}/${MAX_TURNS}`;
+    }
+    return `On-Device Phone Call • Tanglish (${currentLocale})`;
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Top Header */}
@@ -200,16 +258,16 @@ export default function CallScreen() {
         </TouchableOpacity>
         <View style={styles.headerTitleCol}>
           <Text style={styles.headerTitle}>AURA</Text>
-          <Text style={styles.headerSubtitle}>
-            On-Device Phone Call • Tanglish ({currentLocale})
-          </Text>
+          <Text style={styles.headerSubtitle}>{getSubtitle()}</Text>
         </View>
         <TouchableOpacity
           style={styles.localeChip}
           onPress={handleToggleLocale}
           activeOpacity={0.8}
         >
-          <Text style={styles.localeChipText}>{currentLocale}</Text>
+          <Text style={styles.localeChipText}>
+            {currentLocale === 'en-IN' ? 'en-IN (Tanglish)' : 'ta-IN (Tamil)'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -270,7 +328,23 @@ export default function CallScreen() {
       ) : (
         /* Active Call UI */
         <View style={styles.callContent}>
-          {/* Debug Telemetry Overlay */}
+          {/* Offline speech pack download prompt if pack missing on Android */}
+          {!isOfflineInstalled && (
+            <TouchableOpacity
+              style={styles.offlineDownloadBar}
+              onPress={handleDownloadOfflinePack}
+              disabled={isDownloadingOffline}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="cloud-download" size={16} color={colors.teal} />
+              <Text style={styles.offlineDownloadBarText} numberOfLines={1}>
+                {offlineStatusMsg ||
+                  `Download offline speech pack for ${currentLocale} (uses online for now)`}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Debug Telemetry Overlay - updates on each turn */}
           <View style={styles.debugCard}>
             <View style={styles.debugHeaderRow}>
               <MaterialIcons name="speed" size={14} color={colors.teal} />
@@ -426,7 +500,9 @@ export default function CallScreen() {
               activeOpacity={0.8}
             >
               <MaterialIcons name="translate" size={26} color={colors.text} />
-              <Text style={styles.controlLabel}>{currentLocale}</Text>
+              <Text style={styles.controlLabel}>
+                {currentLocale === 'en-IN' ? 'en-IN' : 'ta-IN'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -468,7 +544,7 @@ const styles = StyleSheet.create({
   localeChip: {
     backgroundColor: colors.cardHigh,
     paddingHorizontal: space.sm,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.outline,
@@ -477,6 +553,29 @@ const styles = StyleSheet.create({
     ...type.labelSm,
     color: colors.primary,
     fontWeight: '600',
+    fontSize: 11,
+  },
+
+  /* Offline Download Notification Bar */
+  offlineDownloadBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.cardLow,
+    borderWidth: 1,
+    borderColor: colors.teal + '55',
+    paddingHorizontal: space.md,
+    paddingVertical: 8,
+    borderRadius: radius.md,
+    marginTop: space.xs,
+    marginBottom: 4,
+  },
+  offlineDownloadBarText: {
+    ...type.bodySm,
+    color: colors.teal,
+    fontSize: 11.5,
+    fontWeight: '600',
+    flex: 1,
   },
 
   /* Model Download Section */
@@ -632,7 +731,7 @@ const styles = StyleSheet.create({
   orbArea: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: space.xl,
+    paddingVertical: space.lg,
   },
   orbOuterRing: {
     width: 170,

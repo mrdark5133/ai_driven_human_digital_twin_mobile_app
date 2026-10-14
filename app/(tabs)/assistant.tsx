@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -17,33 +18,156 @@ import { colors, spacing, radii, typography } from '../../theme';
 import { Header } from '../../components/Header';
 import { DataService } from '../../services/dataService';
 import { ChatMessage } from '../../types';
+import { streamLlmResponse, ChatTurn } from '../../src/services/voice/llm';
+import { isModelDownloaded, downloadModel } from '../../src/services/voice/modelManager';
 
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(DataService.getChatHistory());
   const [inputText, setInputText] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [isSending, setIsSending] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
+
+  // Model status & download state
+  const [isModelReady, setIsModelReady] = useState<boolean | null>(null);
+  const [isDownloadingModel, setIsDownloadingModel] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
   const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
+    let active = true;
+    isModelDownloaded().then((ready) => {
+      if (active) setIsModelReady(ready);
+    });
+
     const unsubscribe = DataService.subscribe(() => {
       setMessages(DataService.getChatHistory());
     });
-    return unsubscribe;
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
+  const handleDownloadModel = async () => {
+    setIsDownloadingModel(true);
+    try {
+      await downloadModel((progress) => {
+        setDownloadProgress(progress);
+      });
+      setIsModelReady(true);
+      setIsDownloadingModel(false);
+    } catch (err) {
+      console.warn('[Assistant] Model download failed:', err);
+      setIsDownloadingModel(false);
+    }
+  };
+
+  /**
+   * Builds the vitals context card (3-4 lines) from DataService for the LLM system prompt.
+   * Instructs the model to strictly use only these numbers and never hallucinate.
+   */
+  const buildSystemPromptWithVitals = (): string => {
+    const vitals = DataService.getVitals();
+    const vitalsCard = [
+      `CURRENT USER VITALS:`,
+      `- Heart Rate: ${vitals.heartRate} BPM (${vitals.heartRateTrend || 'nominal'})`,
+      `- Sleep: ${vitals.sleepHours}h ${vitals.sleepMinutes}m (Sleep Score: ${vitals.sleepScore}%)`,
+      `- Activity: ${vitals.steps.toLocaleString()} / ${vitals.stepGoal.toLocaleString()} steps`,
+      `- Stress Index: ${vitals.stressIndex}/100 (${vitals.stressStatus || 'Normal'})`,
+    ].join('\n');
+
+    return `You are AURA, an empathetic, caring personal digital twin and health companion for Dark.
+${vitalsCard}
+CRITICAL RULES:
+1. Use ONLY the exact vital numbers listed in the card above. NEVER invent or hallucinate data or numbers.
+2. Reply in 2-3 friendly, concise sentences.
+3. Match the language and style the user writes (if user writes in casual Tanglish, reply in warm Tanglish; if in English, reply in friendly English).
+4. Do NOT give medical diagnosis or clinical prescriptions. Suggest healthy lifestyle observations.`;
+  };
+
   const handleSendMessage = async (textToSend?: string) => {
-    const content = textToSend || inputText;
-    if (!content.trim()) return;
+    const content = (textToSend || inputText).trim();
+    if (!content || isGenerating) return;
 
     setInputText('');
-    setIsSending(true);
-    await DataService.sendChatMessage(content);
-    setIsSending(false);
+
+    // Check if model is downloaded
+    const downloaded = await isModelDownloaded();
+    if (!downloaded) {
+      setIsModelReady(false);
+      return;
+    }
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMsgId = `msg-${Date.now()}`;
+    const userMsg: ChatMessage = {
+      id: userMsgId,
+      sender: 'user',
+      text: content,
+      timeStr,
+    };
+
+    DataService.addChatMessage(userMsg);
+    setMessages(DataService.getChatHistory());
+
+    const auraMsgId = `msg-${Date.now() + 1}`;
+    const initialAuraMsg: ChatMessage = {
+      id: auraMsgId,
+      sender: 'aura',
+      text: '',
+      timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    DataService.addChatMessage(initialAuraMsg);
+    setMessages(DataService.getChatHistory());
+    setIsGenerating(true);
+    setStreamingMsgId(auraMsgId);
 
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 150);
+    }, 100);
+
+    // Prepare conversation turns for LLM (trimmed to recent history)
+    const currentHistory = DataService.getChatHistory();
+    const llmHistory: ChatTurn[] = currentHistory
+      .slice(-6)
+      .filter((m) => m.id !== auraMsgId && m.text.trim().length > 0)
+      .map((m) => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: m.text,
+      }));
+
+    let accumulatedText = '';
+
+    try {
+      await streamLlmResponse(
+        llmHistory,
+        (token) => {
+          accumulatedText += token;
+          DataService.updateChatMessage(auraMsgId, accumulatedText);
+          setMessages(DataService.getChatHistory());
+          scrollViewRef.current?.scrollToEnd({ animated: false });
+        },
+        {
+          systemPrompt: buildSystemPromptWithVitals(),
+          maxTokens: 120,
+          temperature: 0.7,
+        }
+      );
+    } catch (err: any) {
+      console.warn('[Assistant] LLM stream error:', err);
+      const fallback =
+        accumulatedText.trim().length > 0
+          ? accumulatedText
+          : 'AURA had a hiccup generating a response. Please tap to try again.';
+      DataService.updateChatMessage(auraMsgId, fallback);
+      setMessages(DataService.getChatHistory());
+    } finally {
+      setIsGenerating(false);
+      setStreamingMsgId(null);
+    }
   };
 
   const handleToggleMic = () => {
@@ -78,7 +202,7 @@ export default function AssistantScreen() {
                 </View>
               </View>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <TouchableOpacity
                   style={styles.callAuraBtn}
                   onPress={() => router.push('/call')}
@@ -86,6 +210,16 @@ export default function AssistantScreen() {
                 >
                   <MaterialIcons name="call" size={13} color="#070e1c" />
                   <Text style={styles.callAuraBtnText}>Call AURA</Text>
+                </TouchableOpacity>
+
+                {/* History Button (Part C6) */}
+                <TouchableOpacity
+                  style={styles.historyBtn}
+                  onPress={() => router.push('/call-history')}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="history" size={13} color={colors.primary} />
+                  <Text style={styles.historyBtnText}>History</Text>
                 </TouchableOpacity>
 
                 <View style={styles.neuralPill}>
@@ -96,9 +230,47 @@ export default function AssistantScreen() {
             </View>
           </View>
 
+          {/* Model Download Banner (Shown if on-device model is missing) */}
+          {isModelReady === false && (
+            <View style={styles.modelDownloadCard}>
+              <View style={styles.modelDownloadHeader}>
+                <MaterialIcons name="psychology" size={20} color={colors.primary} />
+                <Text style={styles.modelDownloadTitle}>On-Device AI Setup Required</Text>
+              </View>
+              <Text style={styles.modelDownloadDesc}>
+                AURA text and voice run completely on your device using Qwen2.5-1.5B (~1.1 GB).
+                Download once to chat without server latency or data leakage.
+              </Text>
+
+              {isDownloadingModel ? (
+                <View style={styles.modelProgressBox}>
+                  <View style={styles.modelProgressBarTrack}>
+                    <View
+                      style={[
+                        styles.modelProgressBarFill,
+                        { width: `${Math.round(downloadProgress * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.modelProgressPercent}>
+                    Downloading {Math.round(downloadProgress * 100)}%
+                  </Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.modelDownloadBtn}
+                  onPress={handleDownloadModel}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="download" size={16} color="#070e1c" />
+                  <Text style={styles.modelDownloadBtnText}>Download Model (1.1 GB)</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
           {/* Voice Orb Area - Fixed height block */}
           <View style={styles.voiceOrbCard}>
-            {/* Concentric rings with Center Mic Button */}
             <View style={styles.concentricRings}>
               <View style={styles.ringOuter} />
               <View style={styles.ringMiddle} />
@@ -175,7 +347,7 @@ export default function AssistantScreen() {
             </View>
           </View>
 
-          {/* Quick Action Chips (Horizontal Scroll) */}
+          {/* Quick Action Chips (Horizontal Scroll) - routes through on-device LLM */}
           <View style={styles.chipsSection}>
             <Text style={styles.chipsTitle}>Suggested questions</Text>
 
@@ -188,6 +360,7 @@ export default function AssistantScreen() {
                 style={styles.chipBtn}
                 onPress={() => handleSendMessage('How is my health score today?')}
                 activeOpacity={0.8}
+                disabled={isGenerating}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.tertiary }]} />
                 <Text style={styles.chipText}>How is my health score?</Text>
@@ -197,6 +370,7 @@ export default function AssistantScreen() {
                 style={styles.chipBtn}
                 onPress={() => handleSendMessage('Why did my heart rate spike at 4:12 AM?')}
                 activeOpacity={0.8}
+                disabled={isGenerating}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.secondary }]} />
                 <Text style={styles.chipText}>Why did my heart rate spike?</Text>
@@ -206,6 +380,7 @@ export default function AssistantScreen() {
                 style={styles.chipBtn}
                 onPress={() => handleSendMessage('How was my sleep last night?')}
                 activeOpacity={0.8}
+                disabled={isGenerating}
               >
                 <View style={[styles.chipDot, { backgroundColor: colors.primary }]} />
                 <Text style={styles.chipText}>How was my sleep?</Text>
@@ -224,6 +399,7 @@ export default function AssistantScreen() {
 
             {messages.map((msg) => {
               const isUser = msg.sender === 'user';
+              const isCurrentlyStreaming = msg.id === streamingMsgId;
 
               return (
                 <View
@@ -256,9 +432,22 @@ export default function AssistantScreen() {
                       isUser ? styles.userBubble : styles.auraBubble,
                     ]}
                   >
-                    <Text style={styles.msgBodyText}>{msg.text}</Text>
+                    {isCurrentlyStreaming && !msg.text ? (
+                      /* Typing Indicator */
+                      <View style={styles.typingIndicatorRow}>
+                        <ActivityIndicator size="small" color={colors.secondary} />
+                        <Text style={styles.typingText}>AURA is thinking...</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.msgBodyText}>
+                        {msg.text}
+                        {isCurrentlyStreaming && (
+                          <Text style={{ color: colors.secondary }}> ▍</Text>
+                        )}
+                      </Text>
+                    )}
 
-                    {/* Embedded Health Widget Card */}
+                    {/* Embedded Health Widget Card (preserves demo data badges) */}
                     {msg.telemetryWidget ? (
                       <View style={styles.embeddedWidget}>
                         <View style={styles.widgetLeft}>
@@ -267,7 +456,8 @@ export default function AssistantScreen() {
                           </View>
                           <View>
                             <Text style={styles.widgetLabel}>
-                              {msg.telemetryWidget.label}: <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
+                              {msg.telemetryWidget.label}:{' '}
+                              <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
                             </Text>
                             <Text style={styles.widgetSuggestion}>
                               {msg.telemetryWidget.suggestion || msg.telemetryWidget.targetStrain}
@@ -298,15 +488,20 @@ export default function AssistantScreen() {
               placeholderTextColor={colors.outline}
               onSubmitEditing={() => handleSendMessage()}
               returnKeyType="send"
+              editable={!isGenerating}
             />
 
             <TouchableOpacity
-              style={styles.sendBtn}
+              style={[styles.sendBtn, isGenerating && { opacity: 0.5 }]}
               onPress={() => handleSendMessage()}
-              disabled={isSending || !inputText.trim()}
+              disabled={isGenerating || !inputText.trim()}
               activeOpacity={0.8}
             >
-              <MaterialIcons name="arrow-upward" size={18} color="#070e1c" />
+              {isGenerating ? (
+                <ActivityIndicator size="small" color="#070e1c" />
+              ) : (
+                <MaterialIcons name="arrow-upward" size={18} color="#070e1c" />
+              )}
             </TouchableOpacity>
           </View>
           <Text style={styles.bottomDisclaimer}>Aura gives general tips, not medical advice.</Text>
@@ -383,7 +578,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: colors.primary,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: radii.full,
   },
@@ -391,6 +586,24 @@ const styles = StyleSheet.create({
     ...typography.labelCapsXs,
     color: '#070e1c',
     fontWeight: '700',
+    fontSize: 10,
+    textTransform: 'none',
+  },
+  historyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+    borderWidth: 1,
+    borderColor: colors.outline + '44',
+  },
+  historyBtnText: {
+    ...typography.labelCapsXs,
+    color: colors.primary,
+    fontWeight: '600',
     fontSize: 10,
     textTransform: 'none',
   },
@@ -410,6 +623,71 @@ const styles = StyleSheet.create({
     fontSize: 9,
     textTransform: 'none',
   },
+
+  /* Model Download Card */
+  modelDownloadCard: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: radii.lg,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.primary + '55',
+    gap: 8,
+  },
+  modelDownloadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  modelDownloadTitle: {
+    ...typography.titleMd,
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  modelDownloadDesc: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 11.5,
+    lineHeight: 17,
+  },
+  modelProgressBox: {
+    marginTop: 4,
+    gap: 4,
+  },
+  modelProgressBarTrack: {
+    width: '100%',
+    height: 6,
+    backgroundColor: colors.surfaceContainerHighest,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  modelProgressBarFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  modelProgressPercent: {
+    ...typography.labelCapsXs,
+    color: colors.primary,
+    fontSize: 10,
+  },
+  modelDownloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingVertical: 8,
+    borderRadius: radii.full,
+    marginTop: 4,
+  },
+  modelDownloadBtnText: {
+    ...typography.labelCapsXs,
+    color: '#070e1c',
+    fontWeight: '700',
+    fontSize: 11,
+    textTransform: 'none',
+  },
+
   voiceOrbCard: {
     backgroundColor: colors.surfaceContainerLow,
     borderRadius: radii.xl,
@@ -629,6 +907,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(30, 41, 59, 0.6)',
     gap: 8,
+  },
+  typingIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  typingText: {
+    ...typography.bodySm,
+    color: colors.secondary,
+    fontSize: 12,
+    fontStyle: 'italic',
   },
   msgBodyText: {
     ...typography.bodyMd,

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import {
   ExpoSpeechRecognitionModule,
   ExpoSpeechRecognitionResultEvent,
@@ -6,7 +7,7 @@ import {
 
 export type AsrLocale = 'en-IN' | 'ta-IN';
 
-// Default locale for casual Tanglish recognition (switchable to 'ta-IN' for testing)
+// Default locale for casual Tanglish recognition (switchable to 'ta-IN' for Tamil)
 export const DEFAULT_ASR_LOCALE: AsrLocale = 'en-IN';
 
 export interface AsrCallbacks {
@@ -14,7 +15,8 @@ export interface AsrCallbacks {
   onFinalResult?: (transcript: string) => void;
   onSpeechStart?: () => void;
   onSpeechEnd?: () => void;
-  onError?: (error: string) => void;
+  onSilence?: () => void;
+  onError?: (error: string, code?: string) => void;
   onVolumeChange?: (volume: number) => void;
 }
 
@@ -52,7 +54,7 @@ export async function requestAsrPermissions(): Promise<boolean> {
 }
 
 /**
- * Checks whether on-device speech recognition is supported on this Android device.
+ * Checks whether on-device speech recognition is supported on this device.
  */
 export async function checkOnDeviceSupport(): Promise<boolean> {
   try {
@@ -60,6 +62,44 @@ export async function checkOnDeviceSupport(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Checks whether the offline language pack for the specified locale is installed on Android.
+ */
+export async function checkOfflineLocaleInstalled(locale: AsrLocale): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+
+  try {
+    const supported = ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
+    if (!supported) return false;
+
+    const res = await ExpoSpeechRecognitionModule.getSupportedLocales({});
+    const target = locale.toLowerCase().replace('_', '-');
+    const installed = (res.installedLocales || []).map((l) => l.toLowerCase().replace('_', '-'));
+    return installed.some((l) => l === target || l.startsWith(target));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Triggers offline speech recognition model download for Android (API 13+).
+ */
+export async function triggerOfflineModelDownload(locale: AsrLocale): Promise<{
+  status: 'download_success' | 'opened_dialog' | 'download_scheduled';
+  message: string;
+}> {
+  if (Platform.OS !== 'android') {
+    return {
+      status: 'download_success',
+      message: 'On-device download not required on this platform.',
+    };
+  }
+
+  return await ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({
+    locale,
+  });
 }
 
 /**
@@ -92,7 +132,7 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   // 1. Ensure permissions
   const hasPerm = await requestAsrPermissions();
   if (!hasPerm) {
-    callbacks.onError?.('Microphone or speech recognition permission was denied.');
+    callbacks.onError?.('Microphone or speech recognition permission was denied.', 'not-allowed');
     return;
   }
 
@@ -136,12 +176,17 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
     'error',
     (event: ExpoSpeechRecognitionErrorEvent) => {
       isCurrentlyListening = false;
-      // "no-speech" is normal when user is silent; do not surface as fatal crash
-      if (event.error === 'no-speech') {
-        callbacks.onFinalResult?.('');
+      // "no-speech" and "speech-timeout" are normal when user is silent
+      const isSilence = event.error === 'no-speech' || event.error === 'speech-timeout';
+      if (isSilence) {
+        callbacks.onSilence?.();
         return;
       }
-      callbacks.onError?.(event.message || `Speech recognition error: ${event.error}`);
+
+      callbacks.onError?.(
+        event.message || `Speech recognition error: ${event.error}`,
+        event.error
+      );
     }
   );
 
@@ -158,17 +203,18 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
     () => subEnd.remove(),
   ];
 
-  // 4. Check for on-device recognition support
-  const onDeviceSupported = await checkOnDeviceSupport();
+  // 4. Check if offline language pack is installed.
+  // CRITICAL FIX: Do NOT force on-device recognition unless the offline pack is actually installed!
+  const isOfflineInstalled = await checkOfflineLocaleInstalled(activeLocale);
 
-  // 5. Start recognition with optimized options
+  // 5. Start recognition with appropriate online/offline options
   try {
     isCurrentlyListening = true;
     ExpoSpeechRecognitionModule.start({
       lang: activeLocale,
       interimResults: true,
       continuous: false,
-      requiresOnDeviceRecognition: onDeviceSupported,
+      requiresOnDeviceRecognition: isOfflineInstalled,
       addsPunctuation: true,
       androidIntentOptions: {
         EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 1200,
@@ -179,7 +225,10 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   } catch (err: any) {
     isCurrentlyListening = false;
     clearSubscriptions();
-    callbacks.onError?.(`Failed to start speech recognizer: ${err?.message || String(err)}`);
+    callbacks.onError?.(
+      `Failed to start speech recognizer: ${err?.message || String(err)}`,
+      'client'
+    );
   }
 }
 

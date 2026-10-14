@@ -14,8 +14,19 @@ import {
   SpaceGrotesk_600SemiBold,
   SpaceGrotesk_700Bold,
 } from '@expo-google-fonts/space-grotesk';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, AppState, AppStateStatus } from 'react-native';
 import { colors } from '../theme';
+import { reconcile } from '../src/services/callHistory';
+import {
+  syncDailyCallSchedule,
+  registerNotificationListeners,
+  isNotificationAvailable,
+} from '../src/services/callScheduler';
+
+// Module-scope registration of notification listeners (foreground and background responses)
+if (isNotificationAvailable()) {
+  registerNotificationListeners();
+}
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -28,9 +39,35 @@ export default function RootLayout() {
     SpaceGrotesk_700Bold,
   });
 
+  useEffect(() => {
+    // 1. Initial reconcile on app start
+    reconcile();
+
+    // 2. Schedule daily recurring call triggers
+    syncDailyCallSchedule();
+
+    // 3. Reconcile missed calls on app resume
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        reconcile();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   if (!fontsLoaded) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colors.background,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
@@ -49,7 +86,18 @@ export default function RootLayout() {
         <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="call" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
+        <Stack.Screen
+          name="call"
+          options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="incoming-call"
+          options={{ presentation: 'fullScreenModal', animation: 'fade' }}
+        />
+        <Stack.Screen
+          name="call-history"
+          options={{ presentation: 'card', animation: 'slide_from_right' }}
+        />
       </Stack>
     </SafeAreaProvider>
   );
