@@ -9,7 +9,11 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.aidrivenhuman.app"
+      "bundleIdentifier": "com.aidrivenhuman.app",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow AI-Driven Human to recognize speech for voice conversations with AURA.",
+        "NSMicrophoneUsageDescription": "Allow AI-Driven Human to use the microphone for voice conversations with AURA."
+      }
     },
     "android": {
       "package": "com.aidrivenhuman.app",
@@ -35,7 +39,10 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 26
+            "minSdkVersion": 26,
+            "buildArchs": [
+              "arm64-v8a"
+            ]
           }
         }
       ],
@@ -44,21 +51,19 @@
         {
           "microphonePermission": "Allow AI-Driven Human to use the microphone for voice conversations with AURA.",
           "speechRecognitionPermission": "Allow AI-Driven Human to recognize speech for voice conversations with AURA.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
       ],
-      [
-        "llama.rn",
-        {
-          "enableOpenCL": true
-        }
-      ]
+      "llama.rn"
     ],
     "extra": {
       "router": {},
       "eas": {
         "projectId": "6b148e34-39be-49b8-b621-6ed74c51802c"
       }
-    }
+    },
+    "owner": "dark_5133"
   }
 }
