@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ExpoSpeechRecognitionModule,
   ExpoSpeechRecognitionResultEvent,
@@ -9,6 +10,8 @@ export type AsrLocale = 'en-IN' | 'ta-IN';
 
 // Default locale for casual Tanglish recognition (switchable to 'ta-IN' for Tamil)
 export const DEFAULT_ASR_LOCALE: AsrLocale = 'en-IN';
+export const ASR_WORKING_LOCALE_KEY = '@asr_working_locale';
+export const GOOGLE_SEARCH_PACKAGE = 'com.google.android.googlequicksearchbox';
 
 export interface AsrCallbacks {
   onInterimResult?: (transcript: string) => void;
@@ -22,6 +25,22 @@ export interface AsrCallbacks {
 }
 
 export type AsrSessionState = 'idle' | 'starting' | 'listening' | 'stopping';
+
+export interface FallbackStep {
+  locale: string;
+  useDefaultService: boolean;
+  forceOnline: boolean;
+}
+
+export type FallbackChainStep = FallbackStep;
+
+// Fallback chain: en-IN online -> en-US online -> en-GB online -> en-IN with default service
+const BASE_FALLBACK_CHAIN: FallbackStep[] = [
+  { locale: 'en-IN', useDefaultService: false, forceOnline: true },
+  { locale: 'en-US', useDefaultService: false, forceOnline: true },
+  { locale: 'en-GB', useDefaultService: false, forceOnline: true },
+  { locale: 'en-IN', useDefaultService: true, forceOnline: true },
+];
 
 let activeLocale: AsrLocale = DEFAULT_ASR_LOCALE;
 let sessionState: AsrSessionState = 'idle';
@@ -40,8 +59,18 @@ let isManualStop = false;
 
 // Retry & recovery tracking
 let audioCaptureRetryCount = 0;
-let retriedOnlineForLanguage = false;
 let networkRetryUsed = false;
+
+// Fallback chain state
+let rememberedWorkingLocale: string | null = null;
+let currentChainIndex = 0;
+let pendingFallbackStep: FallbackStep | null = null;
+
+// Diagnostics tracking for honest badge and debug panel
+let currentActiveMode: 'offline' | 'online' = 'online';
+let currentActiveLocale: string = DEFAULT_ASR_LOCALE;
+let currentActiveService = '';
+let isCurrentSessionOnDevice = false;
 
 // Mutex / Synchronization for end event
 let endEventResolver: (() => void) | null = null;
@@ -50,6 +79,16 @@ let endSafetyTimer: any = null;
 // Listening scheduler state (250ms debounce & single flight)
 let restartDebounceTimer: any = null;
 let isStartingListeningFlight = false;
+
+// Restore remembered working locale on module initialization
+AsyncStorage.getItem(ASR_WORKING_LOCALE_KEY)
+  .then((saved) => {
+    if (saved) {
+      rememberedWorkingLocale = saved;
+      console.log(`[ASR] Loaded remembered working locale: "${saved}"`);
+    }
+  })
+  .catch(() => {});
 
 /**
  * Gets the current ASR language locale.
@@ -73,12 +112,39 @@ export function resetAsrLocale(): void {
 }
 
 /**
- * Resets transient error counters (e.g. on new call start or user manual retry).
+ * Resets transient error counters and fallback chain to beginning.
  */
 export function resetAsrRetries(): void {
   audioCaptureRetryCount = 0;
-  retriedOnlineForLanguage = false;
   networkRetryUsed = false;
+}
+
+/**
+ * Resets the locale and service fallback chain to start from the beginning.
+ */
+export function resetFallbackChain(): void {
+  currentChainIndex = 0;
+  pendingFallbackStep = null;
+  audioCaptureRetryCount = 0;
+  networkRetryUsed = false;
+  console.log('[ASR] Fallback chain reset to beginning (attempt #1)');
+}
+
+/**
+ * Returns current ASR diagnostics for honest UI badge and debug panel.
+ */
+export function getAsrDiagnostics(): {
+  mode: 'offline' | 'online';
+  locale: string;
+  servicePackage: string;
+  isAllLocal: boolean;
+} {
+  return {
+    mode: currentActiveMode,
+    locale: currentActiveLocale,
+    servicePackage: currentActiveService,
+    isAllLocal: isCurrentSessionOnDevice,
+  };
 }
 
 /**
@@ -108,7 +174,7 @@ export async function checkOnDeviceSupport(): Promise<boolean> {
 /**
  * Checks whether the offline language pack for the specified locale is installed on Android.
  */
-export async function checkOfflineLocaleInstalled(locale: AsrLocale): Promise<boolean> {
+export async function checkOfflineLocaleInstalled(locale: string): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
 
   try {
@@ -125,64 +191,62 @@ export async function checkOfflineLocaleInstalled(locale: AsrLocale): Promise<bo
 }
 
 /**
+ * Checks if com.google.android.googlequicksearchbox is installed on device.
+ * Verified via ExpoSpeechRecognitionModule.getSpeechRecognitionServices().
+ */
+export function isGoogleQuickSearchInstalled(): boolean {
+  if (Platform.OS !== 'android') return false;
+
+  try {
+    const services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices() || [];
+    return services.includes(GOOGLE_SEARCH_PACKAGE);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Inspects default voice recognition service and queries all available services.
- * Prefers Google App ('com.google.android.googlequicksearchbox') over Google TTS ('com.google.android.tts').
  */
 export function checkDefaultRecognizer(): {
   isGoogle: boolean;
   packageName: string;
   selectedPackage?: string;
+  hasGoogleQuickSearch: boolean;
 } {
   if (Platform.OS !== 'android') {
-    return { isGoogle: true, packageName: 'apple-speech', selectedPackage: 'apple-speech' };
+    return {
+      isGoogle: true,
+      packageName: 'apple-speech',
+      selectedPackage: 'apple-speech',
+      hasGoogleQuickSearch: false,
+    };
   }
 
   try {
     const service = ExpoSpeechRecognitionModule.getDefaultRecognitionService();
     const defaultPackage = service?.packageName || '';
-    console.log(`[ASR] getDefaultRecognitionService().packageName: "${defaultPackage}"`);
+    const hasGoogleQuickSearch = isGoogleQuickSearchInstalled();
 
-    let services: string[] = [];
-    try {
-      services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices() || [];
-      console.log(`[ASR] Available recognition services:`, services);
-    } catch {}
+    const selectedPackage = hasGoogleQuickSearch ? GOOGLE_SEARCH_PACKAGE : defaultPackage;
+    const isGoogle = (selectedPackage || defaultPackage).toLowerCase().includes('google');
 
-    // Priority: com.google.android.googlequicksearchbox > non-TTS Google package > defaultPackage
-    let selectedPackage: string | undefined = undefined;
-    if (services.includes('com.google.android.googlequicksearchbox')) {
-      selectedPackage = 'com.google.android.googlequicksearchbox';
-    } else if (services.some((s) => s.toLowerCase().includes('googlequicksearchbox'))) {
-      selectedPackage = services.find((s) => s.toLowerCase().includes('googlequicksearchbox'));
-    } else if (services.some((s) => s.toLowerCase().includes('google') && !s.toLowerCase().includes('tts'))) {
-      selectedPackage = services.find((s) => s.toLowerCase().includes('google') && !s.toLowerCase().includes('tts'));
-    } else if (defaultPackage && !defaultPackage.toLowerCase().includes('tts')) {
-      selectedPackage = defaultPackage;
-    }
-
-    if (selectedPackage) {
-      console.log(`[ASR] Selected recognizer package: "${selectedPackage}" (avoiding TTS package)`);
-    } else {
-      console.log(`[ASR] Using system default recognizer: "${defaultPackage}"`);
-    }
-
-    const effectivePkg = selectedPackage || defaultPackage;
-    const isGoogle = effectivePkg.toLowerCase().includes('google');
     return {
       isGoogle,
-      packageName: effectivePkg,
-      selectedPackage,
+      packageName: defaultPackage,
+      selectedPackage: hasGoogleQuickSearch ? GOOGLE_SEARCH_PACKAGE : undefined,
+      hasGoogleQuickSearch,
     };
   } catch (err) {
     console.warn('[ASR] Recognizer check error:', err);
-    return { isGoogle: true, packageName: '', selectedPackage: undefined };
+    return { isGoogle: true, packageName: '', selectedPackage: undefined, hasGoogleQuickSearch: false };
   }
 }
 
 /**
  * Triggers offline speech recognition model download for Android (API 13+).
  */
-export async function triggerOfflineModelDownload(locale: AsrLocale): Promise<{
+export async function triggerOfflineModelDownload(locale: string): Promise<{
   status: 'download_success' | 'opened_dialog' | 'download_scheduled';
   message: string;
 }> {
@@ -219,6 +283,24 @@ function clearSubscriptions(): void {
     } catch {}
   });
   cleanupSubscriptions = [];
+}
+
+/**
+ * Builds the fallback chain, placing the remembered working locale first if available.
+ */
+function buildFallbackChain(): FallbackStep[] {
+  if (!rememberedWorkingLocale || rememberedWorkingLocale === 'en-IN') {
+    return BASE_FALLBACK_CHAIN;
+  }
+
+  const preferredStep: FallbackStep = {
+    locale: rememberedWorkingLocale,
+    useDefaultService: false,
+    forceOnline: true,
+  };
+
+  const remaining = BASE_FALLBACK_CHAIN.filter((s) => s.locale !== rememberedWorkingLocale);
+  return [preferredStep, ...remaining];
 }
 
 /**
@@ -260,6 +342,11 @@ async function ensurePreviousSessionFullyEnded(): Promise<void> {
   await new Promise((r) => setTimeout(r, 300));
 }
 
+export interface RequestListeningOptions {
+  forceOnline?: boolean;
+  fallbackStep?: FallbackStep;
+}
+
 /**
  * Unified listening scheduler with single-flight guard and 250ms debounce.
  * Every restart reason (TTS finished, no-speech, end without transcript, retry, tap) goes through it.
@@ -269,7 +356,7 @@ async function ensurePreviousSessionFullyEnded(): Promise<void> {
 export function requestListening(
   reason: string,
   customCallbacks?: AsrCallbacks,
-  options?: { forceOnline?: boolean }
+  options?: RequestListeningOptions
 ): void {
   console.log(`[ASR] requestListening scheduled (reason: "${reason}", debounce: 250ms)`);
 
@@ -290,11 +377,11 @@ export function requestListening(
 }
 
 /**
- * Internal worker that executes a clean speech recognition session.
+ * Internal worker executing a speech recognition attempt according to the fallback chain.
  */
 async function executeListeningSession(
   reason: string,
-  options?: { forceOnline?: boolean }
+  options?: RequestListeningOptions
 ): Promise<void> {
   // Single-flight guard: prevent overlapping execution
   if (isStartingListeningFlight) {
@@ -304,7 +391,7 @@ async function executeListeningSession(
   isStartingListeningFlight = true;
 
   try {
-    // 1. If an active session is currently running or stopping, wait for its "end" event
+    // 1. Wait for any active or stopping session to completely end
     await ensurePreviousSessionFullyEnded();
 
     // 2. Ensure permissions
@@ -316,11 +403,50 @@ async function executeListeningSession(
       return;
     }
 
-    // 3. Increment session ID & reset state
+    // 3. Determine current attempt from fallback chain
+    const chain = buildFallbackChain();
+    let currentStep: FallbackStep;
+
+    if (options?.fallbackStep) {
+      currentStep = options.fallbackStep;
+    } else {
+      if (currentChainIndex >= chain.length) {
+        currentChainIndex = 0;
+      }
+      currentStep = chain[currentChainIndex];
+    }
+
+    // Determine recognition service package
+    const defaultRec = checkDefaultRecognizer();
+    let servicePackage: string | undefined = undefined;
+
+    if (Platform.OS === 'android') {
+      if (currentStep.useDefaultService) {
+        servicePackage = undefined; // use system default service
+      } else if (defaultRec.hasGoogleQuickSearch) {
+        servicePackage = GOOGLE_SEARCH_PACKAGE;
+      } else {
+        servicePackage = undefined;
+      }
+    }
+
+    // Determine offline vs online
+    let useOnDevice = false;
+    if (!currentStep.forceOnline && !options?.forceOnline) {
+      useOnDevice = await checkOfflineLocaleInstalled(currentStep.locale);
+    }
+
+    // Update active diagnostics
+    currentActiveMode = useOnDevice ? 'offline' : 'online';
+    currentActiveLocale = currentStep.locale;
+    currentActiveService = servicePackage || defaultRec.packageName || 'system default';
+    isCurrentSessionOnDevice = useOnDevice;
+
+    // 4. Increment session ID & reset state
     currentSessionId++;
     const sid = currentSessionId;
     sessionState = 'starting';
-    isManualStop = false; // Fresh session: our own code has not stopped it yet
+    isManualStop = false;
 
     cycleMaxVolume = -2;
     lastInterimTranscript = '';
@@ -328,6 +454,12 @@ async function executeListeningSession(
     silenceDetectedInSession = false;
     clearTimeout(interimSilenceDebounceTimer);
     clearSubscriptions();
+
+    const currentAttemptInfo = `locale=${currentStep.locale}, service=${servicePackage || 'default'}`;
+
+    // PART 1.5: Log attempt initiation
+    console.log(`[ASR] attempt: ${currentAttemptInfo}, result=in-progress`);
+    console.log(`[ASR #${sid}] Service used: ${servicePackage ? `explicit (${servicePackage})` : `default (${defaultRec.packageName})`}`);
 
     const deliverFinal = (text: string, source: string) => {
       clearTimeout(interimSilenceDebounceTimer);
@@ -338,12 +470,23 @@ async function executeListeningSession(
       if (!trimmed) return;
 
       console.log(`[ASR #${sid}] final result (${source}): "${trimmed}"`);
-      // Hands-free continuous sessions must end right after the final result is submitted to the LLM
+
+      // PART 1.2: Remember the locale that works in AsyncStorage and start with it next time
+      if (currentStep.locale !== rememberedWorkingLocale) {
+        rememberedWorkingLocale = currentStep.locale;
+        AsyncStorage.setItem(ASR_WORKING_LOCALE_KEY, currentStep.locale).catch(() => {});
+        console.log(`[ASR] Saved working locale to AsyncStorage: "${currentStep.locale}"`);
+      }
+
+      // Successful recognition: reset chain index for future turns
+      currentChainIndex = 0;
+      pendingFallbackStep = null;
+
       stopListening();
       callbacks.onFinalResult?.(trimmed);
     };
 
-    // 4. Register event listeners tagged with session ID (stale events are discarded)
+    // 5. Register event listeners tagged with session ID
     const subResult = ExpoSpeechRecognitionModule.addListener(
       'result',
       (event: ExpoSpeechRecognitionResultEvent) => {
@@ -355,6 +498,15 @@ async function executeListeningSession(
         const topResult = event.results?.[0]?.transcript || '';
         if (!topResult.trim()) return;
         const text = topResult.trim();
+
+        // Successful recognition heard: log success
+        console.log(`[ASR] attempt: ${currentAttemptInfo}, result=success`);
+
+        // Remember working locale on first recognized text
+        if (currentStep.locale !== rememberedWorkingLocale) {
+          rememberedWorkingLocale = currentStep.locale;
+          AsyncStorage.setItem(ASR_WORKING_LOCALE_KEY, currentStep.locale).catch(() => {});
+        }
 
         if (event.isFinal) {
           deliverFinal(text, 'native isFinal');
@@ -407,16 +559,46 @@ async function executeListeningSession(
         const errCode = event.error || 'unknown';
         const errMsg = event.message || `Speech recognition error: ${errCode}`;
 
-        // PART 3.c: If MY code stopped or aborted the recognizer, client or aborted errors are benign
+        // PART 3: If code stopped or aborted recognizer, error is benign
         if (isManualStop && (errCode === 'client' || errCode === 'aborted')) {
           console.log(`[ASR #${sid}] benign client error after own stop (${errCode})`);
           return;
         }
 
-        console.log(`[ASR #${sid}] ASR error (${errCode}): ${errMsg}`);
+        // Check for Android language unavailable / not downloaded error
+        const isLanguageError =
+          errCode === 'language-not-supported' ||
+          errMsg.toLowerCase().includes('not yet downloaded') ||
+          errMsg.toLowerCase().includes('not supported') ||
+          errMsg.toLowerCase().includes('language');
+
+        if (isLanguageError) {
+          // PART 1.5: Log attempt failure
+          console.log(`[ASR] attempt: ${currentAttemptInfo}, result=language-not-supported`);
+
+          // PART 1.2: Advance to next entry in the fallback chain for the same turn without showing banner
+          currentChainIndex++;
+          if (currentChainIndex < chain.length) {
+            pendingFallbackStep = chain[currentChainIndex];
+            console.log(
+              `[ASR] Auto-trying next chain entry #${currentChainIndex + 1}: locale=${pendingFallbackStep.locale}, defaultService=${pendingFallbackStep.useDefaultService}`
+            );
+            return;
+          } else {
+            // PART 1.3: Every entry in the fallback chain has failed. Now and only now show the banner.
+            console.warn(`[ASR] attempt: ${currentAttemptInfo}, result=all_fallback_chain_failed`);
+            callbacks.onError?.(
+              'Speech recognition needs a language pack. Download English offline in Android settings.',
+              'language-pack-missing'
+            );
+            return;
+          }
+        }
+
+        // Standard error logging
+        console.log(`[ASR] attempt: ${currentAttemptInfo}, result=${errCode} (${errMsg})`);
 
         if (errCode === 'no-speech' || errCode === 'speech-timeout') {
-          // Flag silence. Do NOT restart immediately; wait for native "end" event!
           silenceDetectedInSession = true;
           return;
         }
@@ -428,20 +610,12 @@ async function executeListeningSession(
               `[ASR #${sid}] audio-capture error, will retry in 1000ms (attempt ${audioCaptureRetryCount}/3)`
             );
             setTimeout(() => {
-              requestListening('audio-capture retry', undefined, { forceOnline: options?.forceOnline });
+              requestListening('audio-capture retry', undefined, options);
             }, 1000);
             return;
           }
         }
 
-        if (errCode === 'language-not-supported' && !retriedOnlineForLanguage) {
-          retriedOnlineForLanguage = true;
-          console.log(`[ASR #${sid}] language-not-supported, retrying once with online recognition...`);
-          requestListening('language fallback online', undefined, { forceOnline: true });
-          return;
-        }
-
-        // PART 3.d: "network: Server disconnected": retry once after 800 ms, then show calm notice
         if (errCode === 'network') {
           if (!networkRetryUsed) {
             networkRetryUsed = true;
@@ -467,8 +641,7 @@ async function executeListeningSession(
         return;
       }
 
-      console.log(`[ASR #${sid}] ASR end`);
-      console.log(`[ASR #${sid}] cycle max level: ${cycleMaxVolume.toFixed(1)}`);
+      console.log(`[ASR #${sid}] ASR end (cycle max level: ${cycleMaxVolume.toFixed(1)})`);
 
       clearTimeout(interimSilenceDebounceTimer);
       clearSubscriptions();
@@ -486,13 +659,24 @@ async function executeListeningSession(
         r();
       }
 
+      // If a fallback step was queued due to language error, launch it immediately
+      if (pendingFallbackStep) {
+        const nextStep = pendingFallbackStep;
+        pendingFallbackStep = null;
+        console.log(`[ASR] Executing pending fallback step: ${nextStep.locale}`);
+        setTimeout(() => {
+          requestListening(`fallback: ${nextStep.locale}`, undefined, { fallbackStep: nextStep });
+        }, 150);
+        return;
+      }
+
       // 1. If the session ended with an interim transcript but no final result, deliver it!
       if (!hasDeliveredFinal && lastInterimTranscript.trim()) {
         deliverFinal(lastInterimTranscript, 'end event fallback');
         return;
       }
 
-      // 2. If silence was detected, notify silence handler (will route through requestListening)
+      // 2. If silence was detected, notify silence handler
       if (silenceDetectedInSession) {
         callbacks.onSilence?.();
         return;
@@ -511,24 +695,11 @@ async function executeListeningSession(
       () => subEnd.remove(),
     ];
 
-    // 5. Select recognition service package (Google App, avoiding TTS package)
-    const recognizer = checkDefaultRecognizer();
-
-    let isOfflineInstalled = false;
-    if (!options?.forceOnline) {
-      isOfflineInstalled = await checkOfflineLocaleInstalled(activeLocale);
-    }
-    const useOnDevice = options?.forceOnline ? false : isOfflineInstalled;
-
-    console.log(
-      `[ASR #${sid}] start (reason: "${reason}", locale: ${activeLocale}, onDevice: ${useOnDevice}, continuous: true, pkg: ${recognizer.selectedPackage || recognizer.packageName})`
-    );
-
     sessionState = 'listening';
     audioCaptureRetryCount = 0;
 
     const startOptions: any = {
-      lang: activeLocale,
+      lang: currentStep.locale,
       interimResults: true,
       continuous: true,
       requiresOnDeviceRecognition: useOnDevice,
@@ -543,8 +714,8 @@ async function executeListeningSession(
       },
     };
 
-    if (Platform.OS === 'android' && recognizer.selectedPackage) {
-      startOptions.androidRecognitionServicePackage = recognizer.selectedPackage;
+    if (Platform.OS === 'android' && servicePackage) {
+      startOptions.androidRecognitionServicePackage = servicePackage;
     }
 
     ExpoSpeechRecognitionModule.start(startOptions);
@@ -560,11 +731,11 @@ async function executeListeningSession(
 }
 
 /**
- * Legacy startListening wrapper that directly executes or delegates to requestListening.
+ * Legacy startListening wrapper that directly delegates to requestListening.
  */
 export async function startListening(
   customCallbacks?: AsrCallbacks,
-  options?: { forceOnline?: boolean }
+  options?: RequestListeningOptions
 ): Promise<void> {
   requestListening('startListening called', customCallbacks, options);
 }

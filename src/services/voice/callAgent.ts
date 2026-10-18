@@ -7,6 +7,8 @@ import {
   setAsrLocale,
   checkDefaultRecognizer,
   resetAsrRetries,
+  resetFallbackChain,
+  getAsrDiagnostics,
   AsrLocale,
 } from './asr';
 import { streamLlmResponse, ChatTurn, initLlmContext } from './llm';
@@ -44,6 +46,11 @@ export interface CallAgentEvent {
   requiresSettings: boolean;
   notGoogleRecognizer: boolean;
   recognizerPackage: string;
+  // Honest diagnostics & dynamic badge
+  asrMode: 'offline' | 'online';
+  activeLocale: string;
+  isAllLocal: boolean;
+  isLanguagePackMissing: boolean;
 }
 
 export interface StartCallOptions {
@@ -100,6 +107,7 @@ class CallAgentService {
   private micActive = false;
 
   private requiresSettings = false;
+  private isLanguagePackMissing = false;
   private notGoogleRecognizer = false;
   private recognizerPackage = '';
 
@@ -131,6 +139,7 @@ class CallAgentService {
   }
 
   private notify(): void {
+    const asrDiag = getAsrDiagnostics();
     const event: CallAgentEvent = {
       state: this.state,
       userTranscript: this.userTranscript,
@@ -146,7 +155,11 @@ class CallAgentService {
       isTapToTalk: this.tapToTalkMode,
       requiresSettings: this.requiresSettings,
       notGoogleRecognizer: this.notGoogleRecognizer,
-      recognizerPackage: this.recognizerPackage,
+      recognizerPackage: asrDiag.servicePackage || this.recognizerPackage,
+      asrMode: asrDiag.mode,
+      activeLocale: asrDiag.locale,
+      isAllLocal: asrDiag.isAllLocal,
+      isLanguagePackMissing: this.isLanguagePackMissing,
     };
     this.listeners.forEach((fn) => fn(event));
   }
@@ -214,11 +227,13 @@ class CallAgentService {
     this.aiResponse = '';
     this.errorMessage = null;
     this.requiresSettings = false;
+    this.isLanguagePackMissing = false;
     this.firstSentenceSpokenRecorded = false;
     this.micLevel = -2;
     this.cycleMaxLevel = -2;
 
     resetAsrRetries();
+    resetFallbackChain();
     stopTts();
 
     // Reset ASR locale to default en-IN for call
@@ -375,7 +390,7 @@ class CallAgentService {
       return; // Can't talk while assistant is responding
     }
 
-    if (this.state === 'listening') {
+    if (this.state === 'listening' || this.micActive) {
       console.log('[CallAgent] micActive changed to: false (user tapped to stop listening)');
       this.micActive = false;
       this.notify();
@@ -385,6 +400,7 @@ class CallAgentService {
       this.micActive = true;
       this.userTranscript = '';
       this.errorMessage = null;
+      this.isLanguagePackMissing = false;
       this.notify();
       this.scheduleListening('tap');
     }
@@ -392,15 +408,24 @@ class CallAgentService {
 
   /**
    * Called when user taps the Retry button after an error notice.
+   * Restarts the fallback chain from the beginning, clears errors,
+   * and puts the mic state cleanly back to normal.
    */
   public async retryAfterError(): Promise<void> {
     if (!this.isCallActive) return;
     this.errorMessage = null;
+    this.isLanguagePackMissing = false;
+    this.micActive = false;
     resetAsrRetries();
+    resetFallbackChain();
+
     if (this.tapToTalkMode) {
-      await this.handleTapToTalkPress();
+      console.log('[CallAgent] Retry pressed in Tap-to-Talk mode: micActive false, state idle');
+      this.setState('idle');
+      this.notify();
     } else {
-      this.scheduleListening('retry');
+      console.log('[CallAgent] Retry pressed in Hands-Free mode: restarting fallback chain from beginning');
+      this.scheduleListening('user retry button');
     }
   }
 
@@ -508,7 +533,17 @@ class CallAgentService {
         },
         onError: (errorMsg, errorCode) => {
           if (!this.isCallActive || this.isMuted) return;
+
+          // PART 3: Always reset micActive to false so button is not stuck!
           this.micActive = false;
+
+          if (errorCode === 'language-pack-missing') {
+            this.isLanguagePackMissing = true;
+            this.errorMessage =
+              'Speech recognition needs a language pack. Download English offline in Android settings.';
+            this.setState('error');
+            return;
+          }
 
           if (errorCode === 'not-allowed' || errorCode === 'service-not-allowed') {
             this.requiresSettings = true;
@@ -526,6 +561,7 @@ class CallAgentService {
             return;
           }
 
+          // PART 3: In Tap-to-Talk mode, NEVER auto-restart the recognizer!
           if (this.tapToTalkMode) {
             this.errorMessage = errorMsg || 'Speech input interrupted. Tap to talk again.';
             this.setState('idle');

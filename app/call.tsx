@@ -81,6 +81,10 @@ export default function CallScreen() {
     requiresSettings: false,
     notGoogleRecognizer: false,
     recognizerPackage: '',
+    asrMode: 'online',
+    activeLocale: 'en-IN',
+    isAllLocal: false,
+    isLanguagePackMissing: false,
   });
 
   const [currentLocale, setCurrentLocale] = useState<AsrLocale>('en-IN');
@@ -355,8 +359,20 @@ export default function CallScreen() {
         </TouchableOpacity>
 
         <View style={styles.headerSecurityPill}>
-          <MaterialIcons name="lock" size={11} color={colors.teal} />
-          <Text style={styles.headerSecurityText}>100% On-Device Call</Text>
+          <MaterialIcons
+            name={agentEvent.isAllLocal ? 'lock' : 'cloud-queue'}
+            size={11}
+            color={colors.teal}
+          />
+          <Text
+            style={
+              agentEvent.isAllLocal
+                ? styles.headerSecurityText
+                : styles.headerSecurityTextHybrid
+            }
+          >
+            {agentEvent.isAllLocal ? '100% On-Device' : 'On-device AI + Google speech'}
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -436,7 +452,24 @@ export default function CallScreen() {
                 <Text style={styles.calmErrorText} numberOfLines={2}>
                   {agentEvent.errorMessage}
                 </Text>
-                {agentEvent.requiresSettings ? (
+                {agentEvent.isLanguagePackMissing ? (
+                  <View style={styles.calmActionsGroup}>
+                    <TouchableOpacity
+                      style={styles.calmActionBtnSecondary}
+                      onPress={handleDownloadOfflinePack}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.calmActionBtnSecondaryText}>Download pack</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.calmActionBtn}
+                      onPress={handleRetryListening}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.calmActionBtnText}>Retry</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : agentEvent.requiresSettings ? (
                   <TouchableOpacity
                     style={styles.calmActionBtn}
                     onPress={handleOpenSettings}
@@ -718,11 +751,18 @@ export default function CallScreen() {
                 </View>
               </View>
 
-              {/* Recognizer Service Info */}
+              {/* Recognizer Diagnostics (Read-only) */}
               <View style={styles.debugSectionRow}>
-                <Text style={styles.debugSectionLabel}>Speech Recognizer:</Text>
+                <Text style={styles.debugSectionLabel}>Recognizer Package:</Text>
                 <Text style={styles.debugSectionValue} numberOfLines={1}>
                   {agentEvent.recognizerPackage || 'Default system service'}
+                </Text>
+              </View>
+
+              <View style={styles.debugSectionRow}>
+                <Text style={styles.debugSectionLabel}>Active Locale & Mode:</Text>
+                <Text style={styles.debugSectionValue}>
+                  {agentEvent.activeLocale || 'en-IN'} • {agentEvent.asrMode === 'offline' ? 'Offline (On-Device)' : 'Online (Google)'}
                 </Text>
               </View>
 
@@ -910,6 +950,12 @@ const styles = StyleSheet.create({
     color: colors.teal,
     fontWeight: '600',
   },
+  headerSecurityTextHybrid: {
+    ...type.labelSm,
+    fontSize: 9.5,
+    color: colors.teal,
+    fontWeight: '500',
+  },
 
   /* Active Call Layout */
   callContent: {
@@ -985,6 +1031,24 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '700',
     color: '#070e1c',
+  },
+  calmActionsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  calmActionBtnSecondary: {
+    backgroundColor: colors.cardLow,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.outline,
+  },
+  calmActionBtnSecondaryText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.textDim,
   },
 
   /* Avatar & Wave Stage */
