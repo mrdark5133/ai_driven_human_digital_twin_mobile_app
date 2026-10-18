@@ -18,7 +18,7 @@ import { colors, spacing, radii, typography } from '../../theme';
 import { Header } from '../../components/Header';
 import { DataService } from '../../services/dataService';
 import { ChatMessage } from '../../types';
-import { streamLlmResponse, ChatTurn } from '../../src/services/voice/llm';
+import { streamLlmResponse, ChatTurn, warmupLlmContext } from '../../src/services/voice/llm';
 import { isModelDownloaded, downloadModel } from '../../src/services/voice/modelManager';
 import { ASSISTANT_NAME } from '../../src/config/appConfig';
 
@@ -35,35 +35,6 @@ export default function AssistantScreen() {
   const [downloadProgress, setDownloadProgress] = useState(0);
 
   const scrollViewRef = useRef<ScrollView>(null);
-
-  useEffect(() => {
-    let active = true;
-    isModelDownloaded().then((ready) => {
-      if (active) setIsModelReady(ready);
-    });
-
-    const unsubscribe = DataService.subscribe(() => {
-      setMessages(DataService.getChatHistory());
-    });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const handleDownloadModel = async () => {
-    setIsDownloadingModel(true);
-    try {
-      await downloadModel((progress) => {
-        setDownloadProgress(progress);
-      });
-      setIsModelReady(true);
-      setIsDownloadingModel(false);
-    } catch (err) {
-      console.warn('[Assistant] Model download failed:', err);
-      setIsDownloadingModel(false);
-    }
-  };
 
   /**
    * Builds the vitals context card (3-4 lines) from DataService for the LLM system prompt.
@@ -86,6 +57,50 @@ CRITICAL RULES:
 2. Reply in 2-3 friendly, concise sentences.
 3. Match the language and style the user writes (if user writes in casual Tanglish, reply in warm Tanglish; if in English, reply in friendly English).
 4. Do NOT give medical diagnosis or clinical prescriptions. Suggest healthy lifestyle observations.`;
+  };
+
+  useEffect(() => {
+    let active = true;
+    isModelDownloaded().then((ready) => {
+      if (active) {
+        setIsModelReady(ready);
+        if (ready) {
+          // Warm up LLM context with chat prompt so chat completions don't suffer cold start
+          warmupLlmContext({
+            mode: 'chat',
+            systemPrompt: buildSystemPromptWithVitals(),
+          }).catch((err) => {
+            console.warn('[AssistantTab] Warm-up error (non-critical):', err);
+          });
+        }
+      }
+    });
+
+    const unsubscribe = DataService.subscribe(() => {
+      setMessages(DataService.getChatHistory());
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const handleDownloadModel = async () => {
+    setIsDownloadingModel(true);
+    try {
+      await downloadModel((progress) => {
+        setDownloadProgress(progress);
+      });
+      setIsModelReady(true);
+      setIsDownloadingModel(false);
+      warmupLlmContext({
+        mode: 'chat',
+        systemPrompt: buildSystemPromptWithVitals(),
+      }).catch(() => {});
+    } catch (err) {
+      console.warn('[Assistant] Model download failed:', err);
+      setIsDownloadingModel(false);
+    }
   };
 
   const handleSendMessage = async (textToSend?: string) => {

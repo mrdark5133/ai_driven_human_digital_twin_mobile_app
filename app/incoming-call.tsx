@@ -15,6 +15,7 @@ import { colors, radius, space, type } from '../theme/tokens';
 import { CallSlotId, CALL_SLOTS } from '../src/config/callSchedule';
 import { updateCallEntry, saveCallEntry } from '../src/services/callHistory';
 import { ASSISTANT_NAME } from '../src/config/appConfig';
+import { warmupLlmContext } from '../src/services/voice/llm';
 
 export default function IncomingCallScreen() {
   const router = useRouter();
@@ -79,6 +80,11 @@ export default function IncomingCallScreen() {
 
   const handleAnswer = async () => {
     Vibration.cancel();
+
+    // Trigger LLM prefix warm-up immediately so it processes the real system prompt while the opener plays
+    warmupLlmContext({ slot }).catch((err) => {
+      console.warn('[IncomingCall] Warm-up error (non-critical):', err);
+    });
 
     // Ensure entry exists and is marked answered
     await saveCallEntry({

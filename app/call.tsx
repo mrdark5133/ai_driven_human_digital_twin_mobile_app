@@ -8,6 +8,9 @@ import {
   Easing,
   Platform,
   TextInput,
+  Modal,
+  ScrollView,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -21,9 +24,18 @@ import {
   AsrLocale,
   checkOfflineLocaleInstalled,
   triggerOfflineModelDownload,
+  checkDefaultRecognizer,
 } from '../src/services/voice/asr';
+import { warmupLlmContext } from '../src/services/voice/llm';
 import { CallSlotId } from '../src/config/callSchedule';
 import { ASSISTANT_NAME } from '../src/config/appConfig';
+import {
+  getLocalVoicesAsync,
+  getSelectedVoice,
+  setSelectedVoice,
+  playVoiceSample,
+} from '../src/services/voice/tts';
+import type { Voice } from 'expo-speech';
 
 export default function CallScreen() {
   const router = useRouter();
@@ -36,10 +48,16 @@ export default function CallScreen() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
+  // Call duration timer
+  const [callSeconds, setCallSeconds] = useState(0);
+
   // Offline speech pack state
   const [isOfflineInstalled, setIsOfflineInstalled] = useState(true);
   const [isDownloadingOffline, setIsDownloadingOffline] = useState(false);
   const [offlineStatusMsg, setOfflineStatusMsg] = useState<string | null>(null);
+
+  // Debug bottom sheet modal state
+  const [showDebugModal, setShowDebugModal] = useState(false);
 
   // Agent call state
   const [agentEvent, setAgentEvent] = useState<CallAgentEvent>({
@@ -55,13 +73,24 @@ export default function CallScreen() {
     errorMessage: null,
     isMuted: false,
     turnCount: 0,
+    micLevel: -2,
+    cycleMaxLevel: -2,
+    tapToTalkMode: false,
+    micActive: false,
+    isTapToTalk: false,
+    requiresSettings: false,
+    notGoogleRecognizer: false,
+    recognizerPackage: '',
   });
 
   const [currentLocale, setCurrentLocale] = useState<AsrLocale>('en-IN');
   const [devInputText, setDevInputText] = useState('');
+  const [localVoices, setLocalVoices] = useState<Voice[]>([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>(undefined);
 
-  // Animations
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  // Voice wave reactive animations
+  const micAnim = useRef(new Animated.Value(1)).current;
+  const speakingPulse = useRef(new Animated.Value(1)).current;
 
   // 1. Check offline language pack availability
   useEffect(() => {
@@ -74,11 +103,11 @@ export default function CallScreen() {
     };
   }, [currentLocale]);
 
-  // 2. Initial check for model file & start call
+  // 2. Initial check for model file, background LLM warm-up & start call
   useEffect(() => {
     let mounted = true;
 
-    // PART 1: Reset locale to en-IN for every call (including scheduled calls)
+    // Reset locale to en-IN for call
     setAsrLocale('en-IN');
     setCurrentLocale('en-IN');
 
@@ -87,7 +116,12 @@ export default function CallScreen() {
       if (mounted) {
         setModelReady(ready);
         if (ready) {
-          callAgent.startCall({
+          // Warm up LLM context with real prefix for this specific slot
+          warmupLlmContext({ slot: params.slot }).catch((err) => {
+            console.warn('[CallScreen] Warm-up error (non-critical):', err);
+          });
+
+          await callAgent.startCall({
             slot: params.slot,
             historyId: params.historyId,
           });
@@ -109,56 +143,111 @@ export default function CallScreen() {
     };
   }, [params.slot, params.historyId]);
 
-  // 3. Continuous pulse animation based on state
+  // 3. Call seconds elapsed timer
   useEffect(() => {
-    let pulseLoop: Animated.CompositeAnimation | null = null;
+    let timer: any = null;
+    if (modelReady && agentEvent.state !== 'error') {
+      timer = setInterval(() => {
+        setCallSeconds((s) => s + 1);
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [modelReady, agentEvent.state]);
 
-    if (agentEvent.state === 'listening' || agentEvent.state === 'speaking') {
-      pulseLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.18,
-            duration: agentEvent.state === 'speaking' ? 700 : 1200,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 0.95,
-            duration: agentEvent.state === 'speaking' ? 700 : 1200,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseLoop.start();
-    } else if (agentEvent.state === 'thinking') {
-      pulseLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.08,
-            duration: 500,
-            easing: Easing.linear,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1.0,
-            duration: 500,
-            easing: Easing.linear,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseLoop.start();
+  // 4. Live Mic volume reactive wave scaling
+  useEffect(() => {
+    if (agentEvent.state === 'listening' && agentEvent.micLevel > 0) {
+      // micLevel ranges between 0 and 10; scale outer wave dynamically
+      const targetScale = 1 + Math.min(0.28, agentEvent.micLevel * 0.028);
+      Animated.timing(micAnim, {
+        toValue: targetScale,
+        duration: 120,
+        useNativeDriver: true,
+      }).start();
     } else {
-      pulseAnim.setValue(1);
+      Animated.timing(micAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [agentEvent.micLevel, agentEvent.state]);
+
+  // 5. Speaking pulse wave animation
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | null = null;
+    if (agentEvent.state === 'speaking') {
+      loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(speakingPulse, {
+            toValue: 1.15,
+            duration: 650,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(speakingPulse, {
+            toValue: 0.96,
+            duration: 650,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loop.start();
+    } else {
+      speakingPulse.setValue(1);
     }
 
     return () => {
-      if (pulseLoop) pulseLoop.stop();
+      if (loop) loop.stop();
     };
   }, [agentEvent.state]);
 
-  // Handle Offline Speech Pack Download
+  // Actions
+  const handleEndCall = async () => {
+    await callAgent.endCall();
+    router.back();
+  };
+
+  const handleToggleMute = async () => {
+    await callAgent.toggleMute();
+  };
+
+  const handleToggleTapToTalk = async () => {
+    await callAgent.toggleTapToTalkMode();
+  };
+
+  const handleTapToTalkMicPress = async () => {
+    await callAgent.handleTapToTalkPress();
+  };
+
+  const handleRetryListening = async () => {
+    await callAgent.retryAfterError();
+  };
+
+  const handleOpenSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch (err) {
+      console.warn('Failed to open app settings:', err);
+    }
+  };
+
+  const handleToggleLocale = () => {
+    const nextLocale: AsrLocale = currentLocale === 'en-IN' ? 'ta-IN' : 'en-IN';
+    setAsrLocale(nextLocale);
+    setCurrentLocale(nextLocale);
+  };
+
+  const handleSendDevText = async () => {
+    if (!devInputText.trim()) return;
+    const text = devInputText.trim();
+    setDevInputText('');
+    await callAgent.sendDevUtterance(text);
+  };
+
   const handleDownloadOfflinePack = async () => {
     setIsDownloadingOffline(true);
     setOfflineStatusMsg('Requesting offline speech pack...');
@@ -179,7 +268,6 @@ export default function CallScreen() {
     }
   };
 
-  // Handle Model Download
   const handleStartDownload = async () => {
     setIsDownloading(true);
     setDownloadError(null);
@@ -190,6 +278,7 @@ export default function CallScreen() {
       });
       setModelReady(true);
       setIsDownloading(false);
+      warmupLlmContext().catch(() => {});
       await callAgent.startCall({
         slot: params.slot,
         historyId: params.historyId,
@@ -200,33 +289,17 @@ export default function CallScreen() {
     }
   };
 
-  const handleEndCall = async () => {
-    await callAgent.endCall();
-    router.back();
-  };
-
-  const handleToggleMute = async () => {
-    await callAgent.toggleMute();
-  };
-
-  const handleToggleLocale = () => {
-    const nextLocale: AsrLocale = currentLocale === 'en-IN' ? 'ta-IN' : 'en-IN';
-    setAsrLocale(nextLocale);
-    setCurrentLocale(nextLocale);
-  };
-
-  const handleSendDevText = async () => {
-    if (!devInputText.trim()) return;
-    const text = devInputText.trim();
-    setDevInputText('');
-    await callAgent.sendDevUtterance(text);
+  const formatTimer = (totalSeconds: number) => {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   const formatMb = (bytes: number) => {
     return (bytes / (1024 * 1024)).toFixed(1);
   };
 
-  const getStateColor = () => {
+  const getStatusColor = () => {
     switch (agentEvent.state) {
       case 'listening':
         return colors.teal;
@@ -241,7 +314,8 @@ export default function CallScreen() {
     }
   };
 
-  const getStateText = () => {
+  const getStatusText = () => {
+    if (agentEvent.isMuted) return 'Muted';
     switch (agentEvent.state) {
       case 'listening':
         return 'Listening...';
@@ -250,39 +324,47 @@ export default function CallScreen() {
       case 'speaking':
         return 'Speaking...';
       case 'error':
-        return 'Error';
+        return 'Notice';
+      case 'idle':
+        return agentEvent.tapToTalkMode ? 'Tap mic to talk' : 'Connected';
       default:
         return 'Connecting...';
     }
   };
 
-  const getSubtitle = () => {
-    if (params.slot) {
-      const slotName = params.slot === 'morning' ? 'Morning Check-in' : 'Evening Check-in';
-      return `Scheduled • ${slotName} • Turn ${agentEvent.turnCount}/${MAX_TURNS}`;
+  // Load available local en-IN voices when debug modal opens
+  useEffect(() => {
+    if (showDebugModal) {
+      getLocalVoicesAsync().then((voices) => {
+        setLocalVoices(voices);
+        setSelectedVoiceId(getSelectedVoice());
+      });
     }
-    return `On-Device Phone Call • ${currentLocale === 'en-IN' ? 'Tanglish (en-IN)' : 'Tamil script output (ta-IN)'}`;
-  };
+  }, [showDebugModal]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Top Header */}
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.backButton} onPress={handleEndCall} activeOpacity={0.7}>
-          <MaterialIcons name="chevron-left" size={28} color={colors.text} />
-        </TouchableOpacity>
-        <View style={styles.headerTitleCol}>
-          <Text style={styles.headerTitle}>{ASSISTANT_NAME}</Text>
-          <Text style={styles.headerSubtitle}>{getSubtitle()}</Text>
-        </View>
+      {/* Top Header: WhatsApp / Telegram voice call style */}
+      <View style={styles.topHeader}>
         <TouchableOpacity
-          style={styles.localeChip}
-          onPress={handleToggleLocale}
-          activeOpacity={0.8}
+          style={styles.headerIconButton}
+          onPress={handleEndCall}
+          activeOpacity={0.7}
         >
-          <Text style={styles.localeChipText}>
-            {currentLocale === 'en-IN' ? 'en-IN (Tanglish)' : 'Tamil script output'}
-          </Text>
+          <MaterialIcons name="keyboard-arrow-down" size={30} color={colors.text} />
+        </TouchableOpacity>
+
+        <View style={styles.headerSecurityPill}>
+          <MaterialIcons name="lock" size={11} color={colors.teal} />
+          <Text style={styles.headerSecurityText}>100% On-Device Call</Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.headerIconButton}
+          onPress={() => setShowDebugModal(true)}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="tune" size={22} color={colors.textDim} />
         </TouchableOpacity>
       </View>
 
@@ -292,10 +374,10 @@ export default function CallScreen() {
           <View style={styles.downloadIconRing}>
             <MaterialIcons name="cloud-download" size={44} color={colors.primary} />
           </View>
-          <Text style={styles.downloadTitle}>Setup {ASSISTANT_NAME} Voice Intelligence</Text>
+          <Text style={styles.downloadTitle}>Setup {ASSISTANT_NAME} Intelligence</Text>
           <Text style={styles.downloadDescription}>
-            To run 100% on-device with zero server delay or subscription, {ASSISTANT_NAME} requires the
-            Qwen2.5-1.5B model (~1.1 GB). This is downloaded once to your phone.
+            To run 100% on-device with zero server subscription or latency, {ASSISTANT_NAME} uses
+            Qwen2.5-1.5B (~1.1 GB). This is downloaded once to your phone.
           </Text>
 
           {isDownloading ? (
@@ -341,255 +423,454 @@ export default function CallScreen() {
           )}
         </View>
       ) : (
-        /* Active Call UI */
+        /* Active WhatsApp/Telegram Call Interface */
         <View style={styles.callContent}>
-          {/* Offline speech pack download prompt if pack missing on Android */}
-          {!isOfflineInstalled && (
-            <TouchableOpacity
-              style={styles.offlineDownloadBar}
-              onPress={handleDownloadOfflinePack}
-              disabled={isDownloadingOffline}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons name="cloud-download" size={16} color={colors.teal} />
-              <Text style={styles.offlineDownloadBarText} numberOfLines={1}>
-                {offlineStatusMsg ||
-                  `Download offline speech pack for ${currentLocale} (uses online for now)`}
-              </Text>
-            </TouchableOpacity>
-          )}
+          {/* Caller Identity Block */}
+          <View style={styles.callerIdentity}>
+            <Text style={styles.callerName}>{ASSISTANT_NAME}</Text>
+            <Text style={styles.callTimerText}>{formatTimer(callSeconds)}</Text>
 
-          {/* Debug Telemetry Overlay - updates on each turn */}
-          <View style={styles.debugCard}>
-            <View style={styles.debugHeaderRow}>
-              <MaterialIcons name="speed" size={14} color={colors.teal} />
-              <Text style={styles.debugTitle}>ON-DEVICE LATENCY TELEMETRY</Text>
-            </View>
-            <View style={styles.debugGrid}>
-              <View style={styles.debugMetricItem}>
-                <Text style={styles.debugMetricLabel}>1st Token</Text>
-                <Text style={styles.debugMetricValue}>
-                  {agentEvent.debugMetrics.timeToFirstTokenMs !== null
-                    ? `${agentEvent.debugMetrics.timeToFirstTokenMs}ms`
-                    : '--'}
+            {/* Calm Status Line under Name */}
+            {agentEvent.errorMessage ? (
+              <View style={styles.calmErrorRow}>
+                <Text style={styles.calmErrorText} numberOfLines={2}>
+                  {agentEvent.errorMessage}
+                </Text>
+                {agentEvent.requiresSettings ? (
+                  <TouchableOpacity
+                    style={styles.calmActionBtn}
+                    onPress={handleOpenSettings}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.calmActionBtnText}>Settings</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.calmActionBtn}
+                    onPress={handleRetryListening}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.calmActionBtnText}>Retry</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : (
+              <View style={styles.statusPill}>
+                <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
+                <Text style={[styles.statusText, { color: getStatusColor() }]}>
+                  {getStatusText()}
                 </Text>
               </View>
-              <View style={styles.debugMetricItem}>
-                <Text style={styles.debugMetricLabel}>1st Spoken</Text>
-                <Text style={styles.debugMetricValue}>
-                  {agentEvent.debugMetrics.timeToFirstSpokenSentenceMs !== null
-                    ? `${agentEvent.debugMetrics.timeToFirstSpokenSentenceMs}ms`
-                    : '--'}
-                </Text>
-              </View>
-              <View style={styles.debugMetricItem}>
-                <Text style={styles.debugMetricLabel}>LLM Speed</Text>
-                <Text style={styles.debugMetricValue}>
-                  {agentEvent.debugMetrics.tokensPerSecond !== null
-                    ? `${agentEvent.debugMetrics.tokensPerSecond} t/s`
-                    : '--'}
-                </Text>
-              </View>
-              <View style={styles.debugMetricItem}>
-                <Text style={styles.debugMetricLabel}>Tokens</Text>
-                <Text style={styles.debugMetricValue}>
-                  {agentEvent.debugMetrics.tokensGenerated !== null
-                    ? `${agentEvent.debugMetrics.tokensGenerated}`
-                    : '--'}
-                </Text>
-              </View>
-            </View>
+            )}
           </View>
 
-          {/* Central Pulsing Assistant Orb */}
-          <View style={styles.orbArea}>
-            <Animated.View
-              style={[
-                styles.orbOuterRing,
-                {
-                  borderColor: getStateColor(),
-                  transform: [{ scale: pulseAnim }],
-                },
-              ]}
+          {/* Central Avatar & Soft Wave Rings */}
+          <View style={styles.avatarStage}>
+            <TouchableOpacity
+              onLongPress={() => setShowDebugModal(true)}
+              activeOpacity={0.9}
+              style={styles.avatarTouchTarget}
             >
-              <View
+              {/* Outer pulsing ring reacting to mic level or speaking */}
+              <Animated.View
                 style={[
-                  styles.orbMiddleRing,
-                  { borderColor: getStateColor() + '66' },
+                  styles.waveRingOuter,
+                  {
+                    borderColor: getStatusColor() + '33',
+                    transform: [
+                      {
+                        scale:
+                          agentEvent.state === 'speaking'
+                            ? speakingPulse
+                            : agentEvent.state === 'listening'
+                            ? micAnim
+                            : 1,
+                      },
+                    ],
+                  },
                 ]}
               >
+                {/* Inner soft ring */}
                 <View
                   style={[
-                    styles.orbInnerCore,
-                    { backgroundColor: getStateColor() + '22' },
+                    styles.waveRingInner,
+                    { borderColor: getStatusColor() + '66' },
                   ]}
                 >
-                  <MaterialIcons
-                    name={
-                      agentEvent.isMuted
-                        ? 'mic-off'
-                        : agentEvent.state === 'speaking'
-                        ? 'volume-up'
-                        : agentEvent.state === 'thinking'
-                        ? 'psychology'
-                        : 'mic'
-                    }
-                    size={38}
-                    color={getStateColor()}
-                  />
+                  {/* Avatar Center Core */}
+                  <View style={[styles.avatarCircle, { backgroundColor: colors.cardHigh }]}>
+                    <Text style={styles.avatarLetter}>P</Text>
+                  </View>
                 </View>
-              </View>
-            </Animated.View>
+              </Animated.View>
+            </TouchableOpacity>
 
-            {/* State Pill */}
-            <View style={[styles.statePill, { borderColor: getStateColor() + '55' }]}>
-              <View style={[styles.stateDot, { backgroundColor: getStateColor() }]} />
-              <Text style={[styles.statePillText, { color: getStateColor() }]}>
-                {getStateText()}
-              </Text>
+            {/* Live Mic Audio Meter */}
+            <View style={styles.micMeterContainer}>
+              {[0, 1, 2, 3, 4].map((i) => {
+                const threshold = (i + 1) * 1.8;
+                const isLit = agentEvent.micLevel >= threshold;
+                return (
+                  <View
+                    key={i}
+                    style={[
+                      styles.micMeterBar,
+                      { height: 8 + i * 4 },
+                      isLit && styles.micMeterBarActive,
+                    ]}
+                  />
+                );
+              })}
             </View>
           </View>
 
-          {/* PART 3: Live "You said: <text>" line updating with interim results */}
-          <View style={styles.liveTranscriptBar}>
-            <View style={styles.liveTranscriptHeader}>
-              <MaterialIcons
-                name={agentEvent.state === 'listening' ? 'mic' : 'hearing'}
-                size={14}
-                color={colors.teal}
-              />
-              <Text style={styles.liveTranscriptTitle}>YOU SAID (LIVE)</Text>
-            </View>
-            <Text style={styles.liveTranscriptValue} numberOfLines={2}>
-              {agentEvent.userTranscript ? (
-                agentEvent.userTranscript
-              ) : agentEvent.state === 'listening' ? (
-                <Text style={styles.liveTranscriptHint}>Listening... speak now</Text>
-              ) : (
-                <Text style={styles.liveTranscriptHint}>--</Text>
-              )}
-            </Text>
-          </View>
-
-          {/* Real-time Subtitles Area */}
-          <View style={styles.subtitlesSection}>
-            {agentEvent.userTranscript ? (
-              <View style={styles.userBubble}>
-                <Text style={styles.speakerLabel}>You</Text>
-                <Text style={styles.userSpeechText}>{agentEvent.userTranscript}</Text>
-              </View>
-            ) : null}
-
+          {/* Live Captions (Telegram/WhatsApp Voice Call style) */}
+          <View style={styles.captionsContainer}>
             {agentEvent.aiResponse ? (
-              <View style={styles.aiBubble}>
-                <Text style={styles.aiSpeakerLabel}>{ASSISTANT_NAME}</Text>
-                <Text style={styles.aiSpeechText}>{agentEvent.aiResponse}</Text>
+              <View style={styles.captionAiBox}>
+                <Text style={styles.captionAiLabel}>{ASSISTANT_NAME}</Text>
+                <Text style={styles.captionAiText} numberOfLines={2}>
+                  {agentEvent.aiResponse}
+                </Text>
               </View>
             ) : null}
 
-            {agentEvent.errorMessage ? (
-              <View style={styles.errorBubble}>
-                <Text style={styles.errorText}>{agentEvent.errorMessage}</Text>
-              </View>
-            ) : null}
+            <View style={styles.captionUserBox}>
+              <Text style={styles.captionUserLabel}>You</Text>
+              <Text style={styles.captionUserText} numberOfLines={2}>
+                {agentEvent.userTranscript ? (
+                  agentEvent.userTranscript
+                ) : agentEvent.state === 'listening' ? (
+                  <Text style={styles.captionListeningHint}>Listening...</Text>
+                ) : (
+                  '...'
+                )}
+              </Text>
+            </View>
           </View>
 
-          {/* PART 3: DEV manual speech turn input (__DEV__ only) */}
-          {__DEV__ && (
-            <View style={styles.devBarContainer}>
-              <TextInput
-                style={styles.devTextInput}
-                placeholder="DEV test: type speech turn..."
-                placeholderTextColor={colors.outline}
-                value={devInputText}
-                onChangeText={setDevInputText}
-                editable={agentEvent.state === 'listening' || agentEvent.state === 'idle'}
-                onSubmitEditing={handleSendDevText}
-                returnKeyType="send"
-              />
-              <TouchableOpacity
-                style={[
-                  styles.devSendButton,
-                  (!devInputText.trim() ||
-                    agentEvent.state === 'thinking' ||
-                    agentEvent.state === 'speaking') &&
-                    styles.devSendButtonDisabled,
-                ]}
-                onPress={handleSendDevText}
-                disabled={
-                  !devInputText.trim() ||
-                  agentEvent.state === 'thinking' ||
-                  agentEvent.state === 'speaking'
-                }
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="send" size={18} color="#070e1c" />
-              </TouchableOpacity>
-            </View>
-          )}
+          {/* Bottom Call Controls Bar */}
+          <View style={styles.bottomControlsBar}>
+            {agentEvent.tapToTalkMode ? (
+              /* Tap-to-Talk Mode Controls */
+              <View style={styles.controlsRow}>
+                {/* Mode Toggle Button: Switch back to Hands-Free */}
+                <TouchableOpacity
+                  style={styles.controlCircleBtn}
+                  onPress={handleToggleTapToTalk}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="hearing" size={24} color={colors.text} />
+                  <Text style={styles.controlBtnLabel}>Hands-free</Text>
+                </TouchableOpacity>
 
-          {/* Call Controls Footer */}
-          <View style={styles.controlsRow}>
-            {/* Mute Button */}
-            <TouchableOpacity
-              style={[
-                styles.controlButton,
-                agentEvent.isMuted && styles.controlButtonActive,
-              ]}
-              onPress={handleToggleMute}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons
-                name={agentEvent.isMuted ? 'mic-off' : 'mic'}
-                size={26}
-                color={agentEvent.isMuted ? '#070e1c' : colors.text}
-              />
-              <Text
-                style={[
-                  styles.controlLabel,
-                  agentEvent.isMuted && { color: colors.teal },
-                ]}
-              >
-                {agentEvent.isMuted ? 'Unmute' : 'Mute'}
-              </Text>
-            </TouchableOpacity>
+                {/* Big Center Push-to-Talk Mic Button */}
+                <TouchableOpacity
+                  style={[
+                    styles.bigPushToTalkBtn,
+                    agentEvent.micActive && styles.bigPushToTalkBtnActive,
+                  ]}
+                  onPress={handleTapToTalkMicPress}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons
+                    name={agentEvent.micActive ? 'send' : 'mic'}
+                    size={36}
+                    color={agentEvent.micActive ? '#ffffff' : '#070e1c'}
+                  />
+                  <Text
+                    style={[
+                      styles.bigPushToTalkLabel,
+                      agentEvent.micActive && { color: '#ffffff' },
+                    ]}
+                  >
+                    {agentEvent.micActive ? 'Tap to Send' : 'Tap to Talk'}
+                  </Text>
+                </TouchableOpacity>
 
-            {/* End Call Button */}
-            <TouchableOpacity
-              style={styles.endCallButton}
-              onPress={handleEndCall}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons name="call-end" size={32} color="#ffffff" />
-            </TouchableOpacity>
+                {/* End Call Button */}
+                <TouchableOpacity
+                  style={styles.endCallCircleBtn}
+                  onPress={handleEndCall}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="call-end" size={30} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Hands-Free Standard Call Controls */
+              <View style={styles.controlsRow}>
+                {/* Mute Button */}
+                <TouchableOpacity
+                  style={[
+                    styles.controlCircleBtn,
+                    agentEvent.isMuted && styles.controlCircleBtnMuted,
+                  ]}
+                  onPress={handleToggleMute}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons
+                    name={agentEvent.isMuted ? 'mic-off' : 'mic'}
+                    size={26}
+                    color={agentEvent.isMuted ? '#070e1c' : colors.text}
+                  />
+                  <Text
+                    style={[
+                      styles.controlBtnLabel,
+                      agentEvent.isMuted && { color: colors.teal },
+                    ]}
+                  >
+                    {agentEvent.isMuted ? 'Unmute' : 'Mute'}
+                  </Text>
+                </TouchableOpacity>
 
-            {/* Language Switch Button */}
-            <TouchableOpacity
-              style={[
-                styles.controlButton,
-                currentLocale === 'ta-IN' && styles.controlButtonActive,
-              ]}
-              onPress={handleToggleLocale}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons
-                name="translate"
-                size={26}
-                color={currentLocale === 'ta-IN' ? '#070e1c' : colors.text}
-              />
-              <Text
-                style={[
-                  styles.controlLabel,
-                  currentLocale === 'ta-IN' && { color: '#070e1c' },
-                ]}
-                numberOfLines={1}
-              >
-                {currentLocale === 'en-IN' ? 'en-IN' : 'Tamil script output'}
-              </Text>
-            </TouchableOpacity>
+                {/* Tap to Talk Mode Button */}
+                <TouchableOpacity
+                  style={styles.controlCircleBtn}
+                  onPress={handleToggleTapToTalk}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="touch-app" size={24} color={colors.text} />
+                  <Text style={styles.controlBtnLabel}>Tap to talk</Text>
+                </TouchableOpacity>
+
+                {/* End Call Button */}
+                <TouchableOpacity
+                  style={styles.endCallCircleBtn}
+                  onPress={handleEndCall}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="call-end" size={30} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
       )}
+
+      {/* Debug & Diagnostics BottomSheet Modal */}
+      <Modal
+        visible={showDebugModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowDebugModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalTitleRow}>
+                <MaterialIcons name="tune" size={18} color={colors.teal} />
+                <Text style={styles.modalTitle}>Diagnostics & Debug</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowDebugModal(false)}
+                style={styles.modalCloseBtn}
+              >
+                <MaterialIcons name="close" size={20} color={colors.textDim} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalScrollContent}>
+              {/* Latency Telemetry Grid */}
+              <View style={styles.debugCard}>
+                <Text style={styles.debugCardHeading}>ON-DEVICE LATENCY TELEMETRY</Text>
+                <View style={styles.debugGrid}>
+                  <View style={styles.debugMetricItem}>
+                    <Text style={styles.debugMetricLabel}>1st Token</Text>
+                    <Text style={styles.debugMetricValue}>
+                      {agentEvent.debugMetrics.timeToFirstTokenMs !== null
+                        ? `${agentEvent.debugMetrics.timeToFirstTokenMs}ms`
+                        : '--'}
+                    </Text>
+                  </View>
+                  <View style={styles.debugMetricItem}>
+                    <Text style={styles.debugMetricLabel}>1st Spoken</Text>
+                    <Text style={styles.debugMetricValue}>
+                      {agentEvent.debugMetrics.timeToFirstSpokenSentenceMs !== null
+                        ? `${agentEvent.debugMetrics.timeToFirstSpokenSentenceMs}ms`
+                        : '--'}
+                    </Text>
+                  </View>
+                  <View style={styles.debugMetricItem}>
+                    <Text style={styles.debugMetricLabel}>LLM Speed</Text>
+                    <Text style={styles.debugMetricValue}>
+                      {agentEvent.debugMetrics.tokensPerSecond !== null
+                        ? `${agentEvent.debugMetrics.tokensPerSecond} t/s`
+                        : '--'}
+                    </Text>
+                  </View>
+                  <View style={styles.debugMetricItem}>
+                    <Text style={styles.debugMetricLabel}>Tokens</Text>
+                    <Text style={styles.debugMetricValue}>
+                      {agentEvent.debugMetrics.tokensGenerated !== null
+                        ? `${agentEvent.debugMetrics.tokensGenerated}`
+                        : '--'}
+                    </Text>
+                  </View>
+                  <View style={styles.debugMetricItem}>
+                    <Text style={styles.debugMetricLabel}>Max Mic</Text>
+                    <Text style={styles.debugMetricValue}>
+                      {agentEvent.cycleMaxLevel > -2
+                        ? `${agentEvent.cycleMaxLevel.toFixed(1)}`
+                        : '--'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Recognizer Service Info */}
+              <View style={styles.debugSectionRow}>
+                <Text style={styles.debugSectionLabel}>Speech Recognizer:</Text>
+                <Text style={styles.debugSectionValue} numberOfLines={1}>
+                  {agentEvent.recognizerPackage || 'Default system service'}
+                </Text>
+              </View>
+
+              {/* Language Switcher */}
+              <View style={styles.debugSectionRow}>
+                <Text style={styles.debugSectionLabel}>ASR Language:</Text>
+                <TouchableOpacity
+                  style={styles.debugChip}
+                  onPress={handleToggleLocale}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.debugChipText}>
+                    {currentLocale === 'en-IN' ? 'Tanglish (en-IN)' : 'Tamil script (ta-IN)'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Offline Speech Pack Download */}
+              {!isOfflineInstalled && (
+                <TouchableOpacity
+                  style={styles.offlineDownloadBar}
+                  onPress={handleDownloadOfflinePack}
+                  disabled={isDownloadingOffline}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="cloud-download" size={16} color={colors.teal} />
+                  <Text style={styles.offlineDownloadBarText} numberOfLines={1}>
+                    {offlineStatusMsg ||
+                      `Download offline pack for ${currentLocale} (uses online)`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Tap to Talk Toggle Switch */}
+              <View style={styles.debugSectionRow}>
+                <Text style={styles.debugSectionLabel}>Tap-to-Talk fallback:</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.debugToggleBtn,
+                    agentEvent.tapToTalkMode && styles.debugToggleBtnActive,
+                  ]}
+                  onPress={handleToggleTapToTalk}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.debugToggleBtnText,
+                      agentEvent.tapToTalkMode && { color: '#070e1c' },
+                    ]}
+                  >
+                    {agentEvent.tapToTalkMode ? 'ENABLED' : 'OFF'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* LOCAL en-IN Voice Picker */}
+              <View style={styles.debugCard}>
+                <Text style={styles.debugCardHeading}>LOCAL EN-IN TTS VOICES</Text>
+                {localVoices.length === 0 ? (
+                  <Text style={styles.debugEmptyText}>No local en-IN voices found</Text>
+                ) : (
+                  localVoices.map((v) => {
+                    const isSelected = selectedVoiceId === v.identifier;
+                    return (
+                      <View key={v.identifier} style={styles.voiceItemRow}>
+                        <TouchableOpacity
+                          style={styles.voiceSelectBtn}
+                          onPress={async () => {
+                            await setSelectedVoice(v.identifier);
+                            setSelectedVoiceId(v.identifier);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialIcons
+                            name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={18}
+                            color={isSelected ? colors.teal : colors.textDim}
+                          />
+                          <View style={styles.voiceInfoCol}>
+                            <Text
+                              style={[
+                                styles.voiceNameText,
+                                isSelected && { color: colors.teal, fontWeight: '700' },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {v.name || v.identifier}
+                            </Text>
+                            <Text style={styles.voiceIdText} numberOfLines={1}>
+                              {v.identifier}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.playSampleBtn}
+                          onPress={() => playVoiceSample(v.identifier)}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons name="volume-up" size={15} color="#070e1c" />
+                          <Text style={styles.playSampleBtnText}>Sample</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+
+              {/* DEV Text Turn Input Box (__DEV__ only) */}
+              {__DEV__ && (
+                <View style={styles.devSection}>
+                  <Text style={styles.devSectionTitle}>DEV MANUAL SPEECH TURN</Text>
+                  <View style={styles.devBarContainer}>
+                    <TextInput
+                      style={styles.devTextInput}
+                      placeholder="Type test speech turn..."
+                      placeholderTextColor={colors.outline}
+                      value={devInputText}
+                      onChangeText={setDevInputText}
+                      editable={agentEvent.state === 'listening' || agentEvent.state === 'idle'}
+                      onSubmitEditing={handleSendDevText}
+                      returnKeyType="send"
+                    />
+                    <TouchableOpacity
+                      style={[
+                        styles.devSendButton,
+                        (!devInputText.trim() ||
+                          agentEvent.state === 'thinking' ||
+                          agentEvent.state === 'speaking') &&
+                          styles.devSendButtonDisabled,
+                      ]}
+                      onPress={handleSendDevText}
+                      disabled={
+                        !devInputText.trim() ||
+                        agentEvent.state === 'thinking' ||
+                        agentEvent.state === 'speaking'
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <MaterialIcons name="send" size={16} color="#070e1c" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -597,34 +878,385 @@ export default function CallScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: '#0b0f19', // Deep dark backdrop like WhatsApp/Telegram
   },
-  topBar: {
+  topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
+  },
+  headerIconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.cardLow,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerSecurityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.cardLow,
+    paddingHorizontal: space.sm,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+  },
+  headerSecurityText: {
+    ...type.labelSm,
+    fontSize: 10.5,
+    color: colors.teal,
+    fontWeight: '600',
+  },
+
+  /* Active Call Layout */
+  callContent: {
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
+  },
+
+  /* Caller Identity */
+  callerIdentity: {
+    alignItems: 'center',
+    marginTop: space.sm,
+  },
+  callerName: {
+    fontSize: 28,
+    lineHeight: 34,
+    color: colors.text,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  callTimerText: {
+    ...type.bodySm,
+    color: colors.textDim,
+    fontSize: 13,
+    marginTop: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: space.sm,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    backgroundColor: colors.cardLow,
+    marginTop: 6,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  statusText: {
+    ...type.labelSm,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  calmErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.cardHigh,
+    paddingHorizontal: space.sm,
+    paddingVertical: 5,
+    borderRadius: radius.full,
+    marginTop: 6,
+    maxWidth: '90%',
+  },
+  calmErrorText: {
+    ...type.bodySm,
+    fontSize: 11.5,
+    color: colors.amberText,
+    flexShrink: 1,
+  },
+  calmActionBtn: {
+    backgroundColor: colors.teal,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+  },
+  calmActionBtnText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#070e1c',
+  },
+
+  /* Avatar & Wave Stage */
+  avatarStage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: space.md,
+  },
+  avatarTouchTarget: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waveRingOuter: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waveRingInner: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarCircle: {
+    width: 124,
+    height: 124,
+    borderRadius: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+  },
+  avatarLetter: {
+    fontSize: 48,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+
+  /* Live Mic Audio Meter */
+  micMeterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    marginTop: space.md,
+    height: 24,
+  },
+  micMeterBar: {
+    width: 4,
+    borderRadius: 2,
+    backgroundColor: colors.cardHigh,
+  },
+  micMeterBarActive: {
+    backgroundColor: colors.teal,
+  },
+
+  /* Live Captions */
+  captionsContainer: {
+    gap: space.xs,
+    paddingHorizontal: space.xs,
+    marginBottom: space.sm,
+  },
+  captionAiBox: {
+    backgroundColor: colors.cardLow,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.green,
+  },
+  captionAiLabel: {
+    fontSize: 10,
+    color: colors.green,
+    fontWeight: '700',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  captionAiText: {
+    ...type.body,
+    fontSize: 13.5,
+    color: colors.text,
+    lineHeight: 19,
+  },
+  captionUserBox: {
+    backgroundColor: colors.card,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.teal,
+  },
+  captionUserLabel: {
+    fontSize: 10,
+    color: colors.teal,
+    fontWeight: '700',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  captionUserText: {
+    ...type.body,
+    fontSize: 13.5,
+    color: colors.text,
+    lineHeight: 19,
+  },
+  captionListeningHint: {
+    color: colors.textDim,
+    fontStyle: 'italic',
+  },
+
+  /* Bottom Controls */
+  bottomControlsBar: {
+    paddingTop: space.xs,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  controlCircleBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.cardHigh,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlCircleBtnMuted: {
+    backgroundColor: colors.teal,
+  },
+  controlBtnLabel: {
+    fontSize: 9.5,
+    color: colors.textDim,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  bigPushToTalkBtn: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+  },
+  bigPushToTalkBtnActive: {
+    backgroundColor: colors.teal,
+  },
+  bigPushToTalkLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#070e1c',
+    marginTop: 2,
+  },
+  endCallCircleBtn: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+  },
+
+  /* Debug BottomSheet Modal */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    maxHeight: '80%',
+    paddingBottom: space.xl,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.cardHigh,
   },
-  backButton: {
-    padding: space.xs,
-    marginRight: space.xs,
+  modalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  headerTitleCol: {
-    flex: 1,
-  },
-  headerTitle: {
+  modalTitle: {
     ...type.title,
     color: colors.text,
     fontWeight: '700',
   },
-  headerSubtitle: {
+  modalCloseBtn: {
+    padding: space.xs,
+  },
+  modalScrollContent: {
+    padding: space.lg,
+    gap: space.md,
+  },
+  debugCard: {
+    backgroundColor: colors.cardLow,
+    borderRadius: radius.md,
+    padding: space.md,
+    borderWidth: 1,
+    borderColor: colors.cardHigh,
+  },
+  debugCardHeading: {
+    fontSize: 10,
+    letterSpacing: 1,
+    fontWeight: '700',
+    color: colors.teal,
+    marginBottom: space.sm,
+  },
+  debugGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  debugMetricItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  debugMetricLabel: {
+    fontSize: 9,
+    color: colors.outline,
+    fontWeight: '600',
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  debugMetricValue: {
+    fontSize: 13,
+    color: colors.text,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  debugSectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.cardLow,
+    padding: space.md,
+    borderRadius: radius.md,
+  },
+  debugSectionLabel: {
     ...type.bodySm,
     color: colors.textDim,
-    fontSize: 11,
   },
-  localeChip: {
+  debugSectionValue: {
+    ...type.bodySm,
+    color: colors.text,
+    fontWeight: '600',
+    maxWidth: '55%',
+  },
+  debugChip: {
     backgroundColor: colors.cardHigh,
     paddingHorizontal: space.sm,
     paddingVertical: 5,
@@ -632,14 +1264,28 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.outline,
   },
-  localeChipText: {
-    ...type.labelSm,
+  debugChipText: {
+    fontSize: 11,
     color: colors.primary,
     fontWeight: '600',
-    fontSize: 11,
   },
-
-  /* Offline Download Notification Bar */
+  debugToggleBtn: {
+    paddingHorizontal: space.md,
+    paddingVertical: 5,
+    borderRadius: radius.full,
+    backgroundColor: colors.cardHigh,
+    borderWidth: 1,
+    borderColor: colors.outline,
+  },
+  debugToggleBtnActive: {
+    backgroundColor: colors.teal,
+    borderColor: colors.teal,
+  },
+  debugToggleBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.text,
+  },
   offlineDownloadBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -648,10 +1294,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.teal + '55',
     paddingHorizontal: space.md,
-    paddingVertical: 8,
+    paddingVertical: space.sm,
     borderRadius: radius.md,
-    marginTop: space.xs,
-    marginBottom: 4,
   },
   offlineDownloadBarText: {
     ...type.bodySm,
@@ -659,6 +1303,47 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '600',
     flex: 1,
+  },
+  devSection: {
+    backgroundColor: colors.cardLow,
+    padding: space.md,
+    borderRadius: radius.md,
+    gap: space.xs,
+  },
+  devSectionTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.outline,
+    letterSpacing: 0.5,
+  },
+  devBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    backgroundColor: colors.card,
+    borderRadius: radius.full,
+    paddingHorizontal: space.sm,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: colors.outline + '44',
+  },
+  devTextInput: {
+    flex: 1,
+    ...type.bodySm,
+    color: colors.text,
+    paddingVertical: 6,
+    paddingHorizontal: space.xs,
+  },
+  devSendButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devSendButtonDisabled: {
+    opacity: 0.35,
   },
 
   /* Model Download Section */
@@ -759,265 +1444,53 @@ const styles = StyleSheet.create({
     color: colors.red,
     flex: 1,
   },
-
-  /* Active Call UI */
-  callContent: {
-    flex: 1,
+  voiceItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    paddingBottom: space.lg,
+    paddingVertical: space.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.outline + '22',
   },
-  debugCard: {
-    backgroundColor: colors.cardLow,
-    borderRadius: radius.md,
-    padding: space.sm,
-    borderWidth: 1,
-    borderColor: colors.cardHigh,
-    marginTop: space.xs,
-  },
-  debugHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-  debugTitle: {
-    ...type.labelSm,
-    color: colors.teal,
-    letterSpacing: 1,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  debugGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  debugMetricItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  debugMetricLabel: {
-    fontSize: 9,
-    color: colors.outline,
-    fontWeight: '600',
-    marginBottom: 2,
-    textTransform: 'uppercase',
-  },
-  debugMetricValue: {
-    fontSize: 13,
-    color: colors.text,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
-
-  /* Orb Area */
-  orbArea: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: space.lg,
-  },
-  orbOuterRing: {
-    width: 170,
-    height: 170,
-    borderRadius: 85,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  orbMiddleRing: {
-    width: 136,
-    height: 136,
-    borderRadius: 68,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  orbInnerCore: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: space.md,
-    paddingVertical: 6,
-    borderRadius: radius.full,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    marginTop: space.md,
-  },
-  stateDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statePillText: {
-    ...type.labelSm,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-
-  /* Subtitles */
-  subtitlesSection: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: space.sm,
-    gap: space.sm,
-  },
-  userBubble: {
-    backgroundColor: colors.card,
-    padding: space.md,
-    borderRadius: radius.md,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.teal,
-  },
-  speakerLabel: {
-    fontSize: 10,
-    color: colors.teal,
-    fontWeight: '700',
-    marginBottom: 2,
-    textTransform: 'uppercase',
-  },
-  userSpeechText: {
-    ...type.body,
-    color: colors.text,
-  },
-  aiBubble: {
-    backgroundColor: colors.cardHigh,
-    padding: space.md,
-    borderRadius: radius.md,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.green,
-  },
-  aiSpeakerLabel: {
-    fontSize: 10,
-    color: colors.green,
-    fontWeight: '700',
-    marginBottom: 2,
-    textTransform: 'uppercase',
-  },
-  aiSpeechText: {
-    ...type.body,
-    color: colors.text,
-    lineHeight: 22,
-  },
-  errorBubble: {
-    backgroundColor: colors.cardHigh,
-    padding: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.red,
-  },
-  errorText: {
-    ...type.bodySm,
-    color: colors.red,
-  },
-
-  /* Call Controls */
-  controlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingTop: space.md,
-  },
-  controlButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.cardHigh,
-    borderWidth: 1,
-    borderColor: colors.outline,
-  },
-  controlButtonActive: {
-    backgroundColor: colors.teal,
-  },
-  controlLabel: {
-    fontSize: 10,
-    color: colors.textDim,
-    marginTop: 2,
-    fontWeight: '600',
-  },
-  endCallButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#dc2626',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#dc2626',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-  },
-
-  /* PART 3: Live Transcript Card */
-  liveTranscriptBar: {
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.teal,
-    marginVertical: space.xs,
-  },
-  liveTranscriptHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 2,
-  },
-  liveTranscriptTitle: {
-    fontSize: 10,
-    color: colors.teal,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  liveTranscriptValue: {
-    ...type.body,
-    color: colors.text,
-    fontSize: 13,
-  },
-  liveTranscriptHint: {
-    color: colors.textDim,
-    fontStyle: 'italic',
-  },
-
-  /* PART 3: DEV Manual Input Row */
-  devBarContainer: {
+  voiceSelectBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.xs,
-    backgroundColor: colors.cardLow,
-    borderRadius: radius.full,
-    paddingHorizontal: space.sm,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: colors.outline + '44',
-    marginBottom: space.xs,
-  },
-  devTextInput: {
     flex: 1,
+    paddingRight: space.xs,
+  },
+  voiceInfoCol: {
+    flex: 1,
+  },
+  voiceNameText: {
     ...type.bodySm,
     color: colors.text,
-    paddingVertical: 6,
-    paddingHorizontal: space.xs,
+    fontSize: 12,
   },
-  devSendButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.primary,
+  voiceIdText: {
+    ...type.labelSm,
+    color: colors.textDim,
+    fontSize: 10,
+  },
+  playSampleBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: colors.teal,
+    paddingHorizontal: space.sm,
+    paddingVertical: 5,
+    borderRadius: radius.full,
   },
-  devSendButtonDisabled: {
-    opacity: 0.35,
+  playSampleBtnText: {
+    ...type.labelSm,
+    color: '#070e1c',
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  debugEmptyText: {
+    ...type.bodySm,
+    color: colors.textDim,
+    fontStyle: 'italic',
+    paddingVertical: space.xs,
   },
 });

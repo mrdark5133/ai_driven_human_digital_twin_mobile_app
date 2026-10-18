@@ -1,66 +1,143 @@
 import * as Speech from 'expo-speech';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const TTS_LOCALE = 'en-IN';
+export const TTS_VOICE_STORAGE_KEY = '@aura_tts_selected_voice';
 
-interface QueueItem {
-  text: string;
-  onSentenceStart?: () => void;
-}
-
-let sentenceQueue: QueueItem[] = [];
-let isCurrentlySpeaking = false;
-let globalOnDoneCallback: (() => void) | null = null;
-let activeFallbackTimer: any = null;
 let selectedVoiceIdentifier: string | undefined = undefined;
 let voiceResolved = false;
 
+// Native utterance queue tracking
+let pendingUtterances = 0;
+let utteranceSeq = 0;
+let isCurrentlySpeaking = false;
+let globalOnDoneCallback: (() => void) | null = null;
+let pollInterval: any = null;
+let globalSafetyTimer: any = null;
+
 /**
- * Discovers and selects an en-IN female voice using expo-speech, or falls back to default.
+ * Returns all local (offline) en-IN voices available on this device.
  */
-async function ensureFemaleVoice(): Promise<void> {
+export async function getLocalVoicesAsync(): Promise<Speech.Voice[]> {
+  try {
+    const available = await Speech.getAvailableVoicesAsync();
+    return available.filter((v) => {
+      const lang = (v.language || '').toLowerCase().replace('_', '-');
+      const isEnIn = lang === 'en-in' || lang.startsWith('en-in');
+      const id = (v.identifier || '').toLowerCase();
+      return isEnIn && id.includes('local') && !id.includes('network');
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Gets the currently selected voice identifier.
+ */
+export function getSelectedVoice(): string | undefined {
+  return selectedVoiceIdentifier;
+}
+
+/**
+ * Selects and persists the chosen voice identifier.
+ */
+export async function setSelectedVoice(identifier: string): Promise<void> {
+  selectedVoiceIdentifier = identifier;
+  await AsyncStorage.setItem(TTS_VOICE_STORAGE_KEY, identifier).catch(() => {});
+  console.log(`[TTS] User selected voice: ${identifier}`);
+}
+
+/**
+ * Plays a short voice sample to let the user hear the chosen voice.
+ */
+export async function playVoiceSample(identifier: string): Promise<void> {
+  try {
+    Speech.stop();
+    Speech.speak('Hello Dark, naan Pallavi pesuren.', {
+      language: TTS_LOCALE,
+      voice: identifier,
+      rate: 1.0,
+      pitch: 1.05,
+    });
+  } catch (err) {
+    console.warn('[TTS] Failed to play voice sample:', err);
+  }
+}
+
+/**
+ * Discovers and selects an en-IN voice.
+ * Priority:
+ * 1. Saved preference in AsyncStorage
+ * 2. en-in-x-ena-local (standard Indian English female voice in Google TTS)
+ * 3. en-in-x-ene-local
+ * 4. Any other local en-IN voice
+ * 5. Network fallback
+ */
+async function ensureVoiceSelected(): Promise<void> {
   if (voiceResolved) return;
   voiceResolved = true;
 
   try {
+    // 1. Check persisted user choice
+    const savedVoice = await AsyncStorage.getItem(TTS_VOICE_STORAGE_KEY).catch(() => null);
     const available = await Speech.getAvailableVoicesAsync();
-    // Filter voices matching en-IN
+
     const enInVoices = available.filter((v) => {
       const lang = (v.language || '').toLowerCase().replace('_', '-');
       return lang === 'en-in' || lang.startsWith('en-in');
     });
 
-    // Look for female-sounding voice by name/identifier heuristics
-    const femaleVoice = enInVoices.find((v) => {
-      const tag = `${v.name || ''} ${v.identifier || ''}`.toLowerCase();
-      return (
-        tag.includes('female') ||
-        tag.includes('woman') ||
-        tag.includes('girl') ||
-        tag.includes('-c-') ||
-        tag.includes('-d-') ||
-        tag.includes('-f-')
-      );
+    console.log(`[TTS] Found ${enInVoices.length} en-IN voices:`);
+    enInVoices.forEach((v) => {
+      console.log(`[TTS] en-IN voice: identifier="${v.identifier}", quality="${v.quality}", name="${v.name}"`);
     });
 
-    const chosen = femaleVoice || enInVoices[0];
+    if (savedVoice && enInVoices.some((v) => v.identifier === savedVoice)) {
+      selectedVoiceIdentifier = savedVoice;
+      console.log(`[TTS] Using saved voice from settings: "${selectedVoiceIdentifier}"`);
+      return;
+    }
+
+    const localVoices = enInVoices.filter((v) => {
+      const id = (v.identifier || '').toLowerCase();
+      return id.includes('local') && !id.includes('network');
+    });
+
+    // 2. Try default preference: en-in-x-ena-local, then en-in-x-ene-local, then any local
+    const preferredOrder = ['en-in-x-ena-local', 'en-in-x-ene-local'];
+    let chosen: Speech.Voice | undefined;
+
+    for (const pref of preferredOrder) {
+      chosen = localVoices.find((v) => (v.identifier || '').toLowerCase().includes(pref));
+      if (chosen) break;
+    }
+
+    if (!chosen && localVoices.length > 0) {
+      chosen = localVoices[0];
+    }
+
+    if (!chosen && enInVoices.length > 0) {
+      chosen = enInVoices[0];
+    }
+
     if (chosen) {
       selectedVoiceIdentifier = chosen.identifier;
-      console.log(`[TTS] Selected female en-IN voice: "${chosen.name}" (${chosen.identifier})`);
+      console.log(`[TTS] Default selected voice: "${chosen.identifier}" (name: "${chosen.name}")`);
     } else {
-      console.log(`[TTS] No specific en-IN voice identified, using default voice for ${TTS_LOCALE}`);
       selectedVoiceIdentifier = undefined;
     }
   } catch (err) {
-    console.warn('[TTS] Failed to query available voices, using default:', err);
+    console.warn('[TTS] Voice discovery failed, using system default:', err);
     selectedVoiceIdentifier = undefined;
   }
 }
 
-// Eagerly resolve voice on load
-ensureFemaleVoice().catch(() => {});
+// Eagerly resolve voice on module load
+ensureVoiceSelected().catch(() => {});
 
 /**
- * Sets the callback invoked when the entire speech queue has finished playing.
+ * Sets the callback invoked when all queued speech has completely finished.
  */
 export function setTtsOnDone(callback: (() => void) | null): void {
   globalOnDoneCallback = callback;
@@ -74,14 +151,22 @@ export function isTtsSpeaking(): boolean {
 }
 
 /**
- * Clears the queue and immediately interrupts any ongoing speech.
+ * Clears pending queue and immediately stops any ongoing speech.
  */
 export function stopTts(): void {
-  sentenceQueue = [];
+  pendingUtterances = 0;
   isCurrentlySpeaking = false;
   globalOnDoneCallback = null;
-  clearTimeout(activeFallbackTimer);
-  activeFallbackTimer = null;
+
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+  if (globalSafetyTimer) {
+    clearTimeout(globalSafetyTimer);
+    globalSafetyTimer = null;
+  }
+
   try {
     Speech.stop();
   } catch (err) {
@@ -90,8 +175,8 @@ export function stopTts(): void {
 }
 
 /**
- * Enqueues a sentence to be spoken sequentially.
- * If TTS is currently idle, playback begins immediately.
+ * Enqueues a sentence into the native expo-speech queue IMMEDIATELY as it arrives
+ * from the LLM stream without blocking or awaiting prior sentences.
  */
 export function speakSentence(
   sentence: string,
@@ -100,75 +185,32 @@ export function speakSentence(
   const trimmed = sentence.trim();
   if (!trimmed) return;
 
-  sentenceQueue.push({ text: trimmed, onSentenceStart });
-
-  if (!isCurrentlySpeaking) {
-    playNextInQueue();
-  }
-}
-
-function playNextInQueue(): void {
-  clearTimeout(activeFallbackTimer);
-  activeFallbackTimer = null;
-
-  if (sentenceQueue.length === 0) {
-    isCurrentlySpeaking = false;
-    console.log('[TTS] TTS done');
-    if (globalOnDoneCallback) {
-      const cb = globalOnDoneCallback;
-      globalOnDoneCallback = null;
-      cb();
-    }
-    return;
-  }
-
+  utteranceSeq++;
+  const uId = `utt-${utteranceSeq}`;
+  pendingUtterances++;
   isCurrentlySpeaking = true;
-  const item = sentenceQueue.shift();
-  if (!item) {
-    isCurrentlySpeaking = false;
-    return;
-  }
 
-  item.onSentenceStart?.();
-  console.log(`[TTS] TTS start: "${item.text}"`);
-
-  // Fallback timer: estimated speech time + 1s buffer (min 1500ms, max 10000ms)
-  // ~15 characters per second in conversational Tanglish speech
-  const estimatedDurationMs = Math.max(
-    1500,
-    Math.min(10000, Math.round((item.text.length / 15) * 1000) + 1000)
-  );
-
-  let finished = false;
-  const finishItem = () => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(activeFallbackTimer);
-    activeFallbackTimer = null;
-    playNextInQueue();
-  };
-
-  activeFallbackTimer = setTimeout(() => {
-    console.warn(`[TTS] Fallback timer triggered after ${estimatedDurationMs}ms (onDone was dropped)`);
-    finishItem();
-  }, estimatedDurationMs);
+  console.log(`[TTS #${uId}] Queueing into native Speech: "${trimmed.slice(0, 35)}..." (pending: ${pendingUtterances})`);
 
   const speakOptions: Speech.SpeechOptions = {
     language: TTS_LOCALE,
     rate: 1.0,
-    pitch: 1.05, // Friendly, natural tone
+    pitch: 1.05,
+    onStart: () => {
+      console.log(`[TTS #${uId}] onStart`);
+      onSentenceStart?.();
+    },
     onDone: () => {
-      finishItem();
+      console.log(`[TTS #${uId}] onDone`);
+      handleUtteranceCompleted(uId);
     },
     onStopped: () => {
-      finished = true;
-      clearTimeout(activeFallbackTimer);
-      activeFallbackTimer = null;
-      isCurrentlySpeaking = false;
+      console.log(`[TTS #${uId}] onStopped`);
+      handleUtteranceCompleted(uId);
     },
     onError: (err) => {
-      console.warn('[TTS] Speech error:', err);
-      finishItem();
+      console.warn(`[TTS #${uId}] onError:`, err);
+      handleUtteranceCompleted(uId);
     },
   };
 
@@ -176,5 +218,80 @@ function playNextInQueue(): void {
     speakOptions.voice = selectedVoiceIdentifier;
   }
 
-  Speech.speak(item.text, speakOptions);
+  try {
+    Speech.speak(trimmed, speakOptions);
+  } catch (err) {
+    console.warn(`[TTS #${uId}] Speech.speak throw:`, err);
+    handleUtteranceCompleted(uId);
+  }
+
+  startCompletionWatcher();
+}
+
+function handleUtteranceCompleted(id: string): void {
+  pendingUtterances = Math.max(0, pendingUtterances - 1);
+  console.log(`[TTS #${id}] completed (remaining pending: ${pendingUtterances})`);
+
+  if (pendingUtterances === 0) {
+    // When pending count reaches 0, check if audio is still actively playing
+    Speech.isSpeakingAsync().then((speaking) => {
+      if (!speaking && pendingUtterances === 0) {
+        finalizeSpeechSession();
+      }
+    });
+  }
+}
+
+/**
+ * Starts polling Speech.isSpeakingAsync() every 150ms after a 400ms grace period.
+ * Completes immediately when audio has stopped and pending count is 0.
+ * Protected by a single global 20s safety timeout.
+ */
+function startCompletionWatcher(): void {
+  // Global 20s safety timeout
+  if (!globalSafetyTimer) {
+    globalSafetyTimer = setTimeout(() => {
+      console.warn('[TTS] Global safety timeout (20s) reached, finalizing speech session');
+      finalizeSpeechSession();
+    }, 20000);
+  }
+
+  // Poll isSpeakingAsync every 150ms after a 400ms grace period
+  if (!pollInterval) {
+    setTimeout(() => {
+      if (!isCurrentlySpeaking) return;
+      if (pollInterval) return;
+
+      pollInterval = setInterval(async () => {
+        try {
+          const speaking = await Speech.isSpeakingAsync();
+          if (!speaking && pendingUtterances <= 0 && isCurrentlySpeaking) {
+            console.log('[TTS] Native isSpeakingAsync is false and queue empty -> Speech finished');
+            finalizeSpeechSession();
+          }
+        } catch {}
+      }, 150);
+    }, 400);
+  }
+}
+
+function finalizeSpeechSession(): void {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+  if (globalSafetyTimer) {
+    clearTimeout(globalSafetyTimer);
+    globalSafetyTimer = null;
+  }
+
+  pendingUtterances = 0;
+  isCurrentlySpeaking = false;
+  console.log('[TTS] All queued utterances finished speaking');
+
+  if (globalOnDoneCallback) {
+    const cb = globalOnDoneCallback;
+    globalOnDoneCallback = null;
+    cb();
+  }
 }

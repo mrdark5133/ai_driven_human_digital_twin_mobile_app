@@ -1,13 +1,25 @@
-import { startListening, stopListening, abortListening, setAsrLocale } from './asr';
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  requestListening,
+  stopListening,
+  abortListening,
+  setAsrLocale,
+  checkDefaultRecognizer,
+  resetAsrRetries,
+  AsrLocale,
+} from './asr';
 import { streamLlmResponse, ChatTurn, initLlmContext } from './llm';
 import { speakSentence, stopTts, setTtsOnDone } from './tts';
 import { CallSlotId } from '../../config/callSchedule';
 import { appendTurnToCallEntry, updateCallEntry } from '../callHistory';
 import { ASSISTANT_NAME } from '../../config/appConfig';
+import { MORNING_GOAL, EVENING_GOAL } from './persona';
 
 export type CallAgentState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
 export const MAX_TURNS = 6;
+const TAP_TO_TALK_STORAGE_KEY = '@aura_call_tap_to_talk';
 
 export interface CallDebugMetrics {
   timeToFirstTokenMs: number | null;
@@ -24,6 +36,14 @@ export interface CallAgentEvent {
   errorMessage: string | null;
   isMuted: boolean;
   turnCount: number;
+  micLevel: number;
+  cycleMaxLevel: number;
+  tapToTalkMode: boolean; // Persisted user setting
+  micActive: boolean;     // Active recording button state
+  isTapToTalk: boolean;   // Backward compatibility alias for tapToTalkMode
+  requiresSettings: boolean;
+  notGoogleRecognizer: boolean;
+  recognizerPackage: string;
 }
 
 export interface StartCallOptions {
@@ -54,14 +74,6 @@ const EVENING_OPENERS = [
   'Hello Dark da! Day romba busy ah irundhucha? Epdi feel panreenga?',
 ];
 
-const MORNING_GOAL = `You are ${ASSISTANT_NAME}, having a morning check-in call with Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
-Goal: Inquire how he slept, how he feels today, whether he had breakfast, and his plans for today.
-Ask only ONE simple question at a time in casual Tanglish. Keep answers short (1-2 sentences). Do not give medical diagnoses.`;
-
-const EVENING_GOAL = `You are ${ASSISTANT_NAME}, having an evening check-in call with Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
-Goal: Inquire what he ate today, his physical activity, his stress or mood level, and his plans for tomorrow.
-Ask only ONE simple question at a time in casual Tanglish. Keep answers short (1-2 sentences). Do not give medical diagnoses.`;
-
 class CallAgentService {
   private state: CallAgentState = 'idle';
   private conversationHistory: ChatTurn[] = [];
@@ -77,11 +89,19 @@ class CallAgentService {
   private auraTurnCount = 0;
   private callStartTimestamp = 0;
 
-  private asrRetryCount = 0;
-  private asrRetryTimer: any = null;
-  private openerFallbackTimer: any = null;
-  private isStartingListening = false;
   private isProcessingUtterance = false;
+
+  // Mic metering & recognizer
+  private micLevel = -2;
+  private cycleMaxLevel = -2;
+
+  // Separate states: tapToTalkMode (persisted setting) vs micActive (button state)
+  private tapToTalkMode = false;
+  private micActive = false;
+
+  private requiresSettings = false;
+  private notGoogleRecognizer = false;
+  private recognizerPackage = '';
 
   private debugMetrics: CallDebugMetrics = {
     timeToFirstTokenMs: null,
@@ -92,6 +112,17 @@ class CallAgentService {
 
   private endOfUserSpeechTimestamp: number | null = null;
   private firstSentenceSpokenRecorded = false;
+
+  constructor() {
+    // Eagerly restore tap to talk setting from persistent storage
+    AsyncStorage.getItem(TAP_TO_TALK_STORAGE_KEY)
+      .then((val) => {
+        if (val !== null) {
+          this.tapToTalkMode = val === 'true';
+        }
+      })
+      .catch(() => {});
+  }
 
   public subscribe(listener: CallAgentListener): () => void {
     this.listeners.add(listener);
@@ -108,6 +139,14 @@ class CallAgentService {
       errorMessage: this.errorMessage,
       isMuted: this.isMuted,
       turnCount: this.auraTurnCount,
+      micLevel: this.micLevel,
+      cycleMaxLevel: this.cycleMaxLevel,
+      tapToTalkMode: this.tapToTalkMode,
+      micActive: this.micActive,
+      isTapToTalk: this.tapToTalkMode,
+      requiresSettings: this.requiresSettings,
+      notGoogleRecognizer: this.notGoogleRecognizer,
+      recognizerPackage: this.recognizerPackage,
     };
     this.listeners.forEach((fn) => fn(event));
   }
@@ -119,6 +158,44 @@ class CallAgentService {
   }
 
   /**
+   * Updates persisted tapToTalkMode setting (changed ONLY by user mode toggle).
+   */
+  public async setTapToTalkMode(enabled: boolean): Promise<void> {
+    this.tapToTalkMode = enabled;
+    await AsyncStorage.setItem(TAP_TO_TALK_STORAGE_KEY, String(enabled)).catch(() => {});
+    console.log(`[CallAgent] tapToTalkMode set to: ${enabled}`);
+
+    if (this.tapToTalkMode) {
+      if (this.state === 'listening') {
+        this.micActive = false;
+        await stopListening();
+        this.setState('idle');
+      }
+    } else {
+      if (this.isCallActive && this.state === 'idle' && !this.isMuted) {
+        this.scheduleListening('switched to hands-free');
+      }
+    }
+    this.notify();
+  }
+
+  public async toggleTapToTalkMode(): Promise<void> {
+    await this.setTapToTalkMode(!this.tapToTalkMode);
+  }
+
+  public async toggleTapToTalk(): Promise<void> {
+    await this.toggleTapToTalkMode();
+  }
+
+  public getTapToTalkMode(): boolean {
+    return this.tapToTalkMode;
+  }
+
+  public getTapToTalk(): boolean {
+    return this.tapToTalkMode;
+  }
+
+  /**
    * Starts the conversational phone call loop.
    */
   public async startCall(options?: StartCallOptions): Promise<void> {
@@ -126,7 +203,7 @@ class CallAgentService {
 
     this.isCallActive = true;
     this.isMuted = false;
-    this.isStartingListening = false;
+    this.micActive = false;
     this.isProcessingUtterance = false;
     this.activeSlot = options?.slot;
     this.activeHistoryId = options?.historyId;
@@ -136,15 +213,28 @@ class CallAgentService {
     this.userTranscript = '';
     this.aiResponse = '';
     this.errorMessage = null;
+    this.requiresSettings = false;
     this.firstSentenceSpokenRecorded = false;
-    this.asrRetryCount = 0;
-    clearTimeout(this.asrRetryTimer);
-    clearTimeout(this.openerFallbackTimer);
+    this.micLevel = -2;
+    this.cycleMaxLevel = -2;
+
+    resetAsrRetries();
     stopTts();
 
-    // PART 1: Every call (including scheduled calls) defaults to 'en-IN'
+    // Reset ASR locale to default en-IN for call
     setAsrLocale('en-IN');
-    console.log(`[CallAgent] Starting call (slot: ${options?.slot || 'manual'}, historyId: ${options?.historyId || 'none'}, defaultLocale: en-IN)`);
+
+    // Check recognizer service
+    const rec = checkDefaultRecognizer();
+    this.recognizerPackage = rec.selectedPackage || rec.packageName;
+    this.notGoogleRecognizer = !rec.isGoogle && Platform.OS === 'android';
+    if (this.notGoogleRecognizer) {
+      console.warn(`[CallAgent] Non-Google default voice recognizer: ${this.recognizerPackage}`);
+    }
+
+    console.log(
+      `[CallAgent] Starting call (slot: ${options?.slot || 'manual'}, historyId: ${options?.historyId || 'none'}, recognizer: ${this.recognizerPackage || 'system'})`
+    );
 
     // Reset debug metrics
     this.debugMetrics = {
@@ -163,8 +253,12 @@ class CallAgentService {
       if (this.activeSlot) {
         await this.handleScheduledCallOpener();
       } else {
-        // Normal user-initiated call, begin listening cycle
-        await this.startListeningCycle();
+        // Normal user-initiated call: if hands-free, begin listening; if tap-to-talk, wait in idle
+        if (this.tapToTalkMode) {
+          this.setState('idle');
+        } else {
+          this.scheduleListening('initial call start');
+        }
       }
     } catch (err: any) {
       this.errorMessage = err?.message || `Failed to start ${ASSISTANT_NAME} call agent.`;
@@ -185,35 +279,20 @@ class CallAgentService {
     this.recordTurn('assistant', chosenOpener);
     this.setState('speaking');
 
-    // Fallback timer for opener in case expo-speech drops onDone
-    const estimatedOpenerMs = Math.max(
-      2000,
-      Math.min(10000, Math.round((chosenOpener.length / 15) * 1000) + 1500)
-    );
+    setTtsOnDone(() => {
+      if (!this.isCallActive) return;
 
-    let openerFinished = false;
-    const startListeningAfterOpener = () => {
-      if (openerFinished) return;
-      openerFinished = true;
-      clearTimeout(this.openerFallbackTimer);
-      if (this.isCallActive && !this.isMuted) {
-        console.log('[CallAgent] Opener TTS finished, starting listening cycle');
-        this.startListeningCycle();
+      if (this.tapToTalkMode) {
+        console.log('[CallAgent] Opener finished in Tap-to-Talk mode -> idle');
+        this.micActive = false;
+        this.setState('idle');
+      } else if (!this.isMuted) {
+        console.log('[CallAgent] Opener TTS finished, waiting 300ms before starting listening');
+        this.setState('idle');
+        this.scheduleListening('TTS finished', 300);
       } else {
         this.setState('idle');
       }
-    };
-
-    clearTimeout(this.openerFallbackTimer);
-    this.openerFallbackTimer = setTimeout(() => {
-      if (this.isCallActive && this.state === 'speaking') {
-        console.warn(`[CallAgent] Opener fallback timer expired (${estimatedOpenerMs}ms), forcing listening cycle`);
-        startListeningAfterOpener();
-      }
-    }, estimatedOpenerMs);
-
-    setTtsOnDone(() => {
-      startListeningAfterOpener();
     });
 
     speakSentence(chosenOpener);
@@ -241,9 +320,7 @@ class CallAgentService {
 
     this.isCallActive = false;
     this.isProcessingUtterance = false;
-    this.isStartingListening = false;
-    clearTimeout(this.asrRetryTimer);
-    clearTimeout(this.openerFallbackTimer);
+    this.micActive = false;
     stopTts();
     await abortListening();
 
@@ -271,51 +348,120 @@ class CallAgentService {
   public async toggleMute(): Promise<void> {
     this.isMuted = !this.isMuted;
     if (this.isMuted) {
+      this.micActive = false;
       await stopListening();
       if (this.state === 'listening') {
         this.setState('idle');
       }
     } else {
       if (this.isCallActive && this.state !== 'speaking' && this.state !== 'thinking') {
-        await this.startListeningCycle();
+        if (!this.tapToTalkMode) {
+          this.scheduleListening('unmute');
+        }
       }
     }
     this.notify();
   }
 
   /**
-   * Starts a new speech recognition listening cycle with resilient retry and silence handling.
+   * Handles user tapping the mic in "Tap to talk" mode.
+   * If idle: activates mic and starts listening.
+   * If listening: deactivates mic and stops listening.
+   * Note: The mic button NEVER changes tapToTalkMode!
    */
-  private async startListeningCycle(): Promise<void> {
+  public async handleTapToTalkPress(): Promise<void> {
     if (!this.isCallActive) return;
-    if (this.isMuted) {
-      console.log('[CallAgent] Listening cycle skipped: microphone is muted');
+    if (this.state === 'speaking' || this.state === 'thinking') {
+      return; // Can't talk while assistant is responding
+    }
+
+    if (this.state === 'listening') {
+      console.log('[CallAgent] micActive changed to: false (user tapped to stop listening)');
+      this.micActive = false;
+      this.notify();
+      await stopListening();
+    } else {
+      console.log('[CallAgent] micActive changed to: true (user tapped to start listening)');
+      this.micActive = true;
+      this.userTranscript = '';
+      this.errorMessage = null;
+      this.notify();
+      this.scheduleListening('tap');
+    }
+  }
+
+  /**
+   * Called when user taps the Retry button after an error notice.
+   */
+  public async retryAfterError(): Promise<void> {
+    if (!this.isCallActive) return;
+    this.errorMessage = null;
+    resetAsrRetries();
+    if (this.tapToTalkMode) {
+      await this.handleTapToTalkPress();
+    } else {
+      this.scheduleListening('retry');
+    }
+  }
+
+  /**
+   * Routes listening requests through single unified scheduler with cool-down delay.
+   */
+  private scheduleListening(reason: string, delayMs = 0): void {
+    if (!this.isCallActive || this.isMuted) return;
+    if (this.state === 'speaking' || this.state === 'thinking') {
+      console.log(`[CallAgent] scheduleListening deferred for "${reason}": assistant is active`);
       return;
     }
-    if (this.isStartingListening) return;
-    this.isStartingListening = true;
 
-    try {
-      this.userTranscript = '';
-      this.setState('listening');
-      console.log('[CallAgent] Listening cycle started');
+    if (this.tapToTalkMode && reason !== 'tap') {
+      console.log(`[CallAgent] scheduleListening skipped for "${reason}": tapToTalkMode is active`);
+      this.micActive = false;
+      this.setState('idle');
+      return;
+    }
 
-      await startListening({
+    if (delayMs > 0) {
+      setTimeout(() => {
+        if (this.isCallActive && !this.isMuted && this.state !== 'speaking' && this.state !== 'thinking') {
+          this.executeListening(reason);
+        }
+      }, delayMs);
+    } else {
+      this.executeListening(reason);
+    }
+  }
+
+  /**
+   * Executes listening through requestListening with session callbacks.
+   */
+  private executeListening(reason: string): void {
+    if (!this.isCallActive || this.isMuted) return;
+    if (this.state === 'speaking' || this.state === 'thinking') return;
+
+    this.micActive = true;
+    this.setState('listening');
+    console.log(`[CallAgent] Listening cycle started (reason: "${reason}")`);
+
+    requestListening(
+      reason,
+      {
         onInterimResult: (transcript) => {
           if (!this.isCallActive) return;
-          this.asrRetryCount = 0; // speech received, reset error count
           this.userTranscript = transcript;
           this.notify();
         },
         onFinalResult: async (finalTranscript) => {
           if (!this.isCallActive) return;
-          this.asrRetryCount = 0; // valid turn completed
+          this.micActive = false;
 
           const trimmed = finalTranscript.trim();
           if (!trimmed) {
-            // Empty result, loop back to listen
             if (this.state === 'listening') {
-              await this.startListeningCycle();
+              this.setState('idle');
+              if (!this.tapToTalkMode) {
+                this.scheduleListening('empty transcript', 300);
+              }
             }
             return;
           }
@@ -323,59 +469,74 @@ class CallAgentService {
           this.userTranscript = trimmed;
           await this.handleUserUtterance(trimmed);
         },
+        onVolumeChange: (vol, maxVol) => {
+          if (!this.isCallActive) return;
+          this.micLevel = vol;
+          this.cycleMaxLevel = maxVol;
+          this.notify();
+        },
         onSilence: () => {
           if (!this.isCallActive || this.isMuted) return;
-          console.log('[CallAgent] ASR silence detected, silently restarting listening');
-          if (this.state === 'listening') {
-            this.startListeningCycle();
+          this.micActive = false;
+
+          if (this.tapToTalkMode) {
+            console.log('[CallAgent] Tap-to-Talk: silence detected, returning to idle');
+            this.setState('idle');
+            return;
           }
+
+          console.log('[CallAgent] ASR silence detected, silently waiting 300ms before restarting');
+          this.setState('idle');
+          this.scheduleListening('no-speech', 300);
         },
         onEnd: () => {
           if (!this.isCallActive || this.isMuted) return;
-          console.log('[CallAgent] ASR end with no transcript, silently restarting listening');
+          this.micActive = false;
+
+          if (this.tapToTalkMode) {
+            if (this.state === 'listening') {
+              this.setState('idle');
+            }
+            return;
+          }
+
           if (this.state === 'listening') {
-            this.startListeningCycle();
+            console.log('[CallAgent] ASR end with no transcript, restarting after 300ms');
+            this.setState('idle');
+            this.scheduleListening('end without transcript', 300);
           }
         },
         onError: (errorMsg, errorCode) => {
           if (!this.isCallActive || this.isMuted) return;
+          this.micActive = false;
 
-          // Exponential backoff retry for transient errors (up to 3 times: 500ms, 1s, 2s)
-          if (this.asrRetryCount < 3) {
-            const delays = [500, 1000, 2000];
-            const delay = delays[this.asrRetryCount] || 2000;
-            this.asrRetryCount++;
-            console.log(`[CallAgent] ASR transient error (${errorCode}), retrying in ${delay}ms (attempt ${this.asrRetryCount}/3)`);
-
-            clearTimeout(this.asrRetryTimer);
-            this.asrRetryTimer = setTimeout(() => {
-              if (this.isCallActive && !this.isMuted && this.state === 'listening') {
-                this.startListeningCycle();
-              }
-            }, delay);
-          } else {
-            // Reached max 3 retries: stop and show user-friendly message
-            let friendly = 'Speech recognition stopped unexpectedly.';
-            if (errorCode === 'network') {
-              friendly = 'No internet connection for speech recognition. Connect to internet or download offline speech pack.';
-            } else if (errorCode === 'language-not-supported') {
-              friendly = 'Selected language is not supported or offline pack is missing.';
-            } else if (errorCode === 'not-allowed') {
-              friendly = 'Microphone or speech recognition permission was denied.';
-            } else if (errorCode === 'service-not-allowed') {
-              friendly = 'Speech recognition service is unavailable on this device.';
-            } else if (errorMsg) {
-              friendly = errorMsg;
-            }
-
-            this.errorMessage = friendly;
+          if (errorCode === 'not-allowed' || errorCode === 'service-not-allowed') {
+            this.requiresSettings = true;
+            this.errorMessage =
+              errorCode === 'not-allowed'
+                ? 'Microphone permission was denied. Tap to open Settings.'
+                : 'Speech recognition service is unavailable. Set Google as default voice input.';
             this.setState('error');
+            return;
           }
+
+          if (errorCode === 'network') {
+            this.errorMessage = 'Network disconnected. Tap Retry to connect.';
+            this.setState('error');
+            return;
+          }
+
+          if (this.tapToTalkMode) {
+            this.errorMessage = errorMsg || 'Speech input interrupted. Tap to talk again.';
+            this.setState('idle');
+            return;
+          }
+
+          console.log(`[CallAgent] ASR error (${errorCode}), retrying via requestListening...`);
+          this.scheduleListening('retry', 800);
         },
-      });
-    } finally {
-      this.isStartingListening = false;
-    }
+      }
+    );
   }
 
   /**
@@ -385,23 +546,35 @@ class CallAgentService {
     if (this.isProcessingUtterance) return;
     this.isProcessingUtterance = true;
 
+    const turnSubmittedTimestamp = Date.now();
+    let fillerTimer: any = null;
+    let fillerPlayed = false;
+
     try {
-      // 1. Immediately STOP listening while AI speaks
+      // 1. Immediately STOP listening while AI is thinking and speaking
       await stopListening();
+      this.micActive = false;
       this.endOfUserSpeechTimestamp = Date.now();
       this.firstSentenceSpokenRecorded = false;
+      this.errorMessage = null;
 
       this.setState('thinking');
 
-      // 2. Play an immediate conversational filler to mask LLM latency
-      const filler = CASUAL_FILLERS[Math.floor(Math.random() * CASUAL_FILLERS.length)];
-      speakSentence(filler);
+      // 2. Play filler word ONLY if the first token takes longer than 700ms
+      fillerTimer = setTimeout(() => {
+        if (!this.isCallActive || this.state !== 'thinking') return;
+        fillerPlayed = true;
+        const filler = CASUAL_FILLERS[Math.floor(Math.random() * CASUAL_FILLERS.length)];
+        console.log(`[CallAgent] filler played: "${filler}"`);
+        speakSentence(filler);
+      }, 700);
 
       // 3. Record user turn
       this.recordTurn('user', userInput);
 
       // Check if max turns reached (AURA turns)
       if (this.auraTurnCount >= MAX_TURNS) {
+        if (fillerTimer) clearTimeout(fillerTimer);
         await this.handleCallWrapUp();
         return;
       }
@@ -410,7 +583,6 @@ class CallAgentService {
       let sentenceBuffer = '';
       this.aiResponse = '';
 
-      // Determine custom system prompt based on scheduled slot goal
       let customSystemPrompt: string | undefined;
       if (this.activeSlot === 'morning') {
         customSystemPrompt = MORNING_GOAL;
@@ -435,9 +607,14 @@ class CallAgentService {
 
             if (sentenceToSpeak.length > 0) {
               if (!this.firstSentenceSpokenRecorded && this.endOfUserSpeechTimestamp) {
-                this.debugMetrics.timeToFirstSpokenSentenceMs =
-                  Date.now() - this.endOfUserSpeechTimestamp;
+                const ttfsMs = Date.now() - this.endOfUserSpeechTimestamp;
+                this.debugMetrics.timeToFirstSpokenSentenceMs = ttfsMs;
                 this.firstSentenceSpokenRecorded = true;
+
+                const ttftMs = this.debugMetrics.timeToFirstTokenMs ?? 0;
+                console.log(
+                  `[CallAgent] Timing: end of speech -> LLM first token (${ttftMs}ms) -> first sentence spoken (${ttfsMs}ms)`
+                );
               }
 
               this.setState('speaking');
@@ -447,21 +624,40 @@ class CallAgentService {
         },
         {
           systemPrompt: customSystemPrompt,
+          maxTokens: 50,
+          temperature: 0.5,
           onFirstToken: (ttftMs) => {
             if (!this.isCallActive) return;
+
+            const elapsedSinceSubmit = Date.now() - turnSubmittedTimestamp;
+            if (fillerTimer) {
+              clearTimeout(fillerTimer);
+              fillerTimer = null;
+            }
+
+            if (fillerPlayed) {
+              console.log(`[CallAgent] first token arrived in ${elapsedSinceSubmit}ms (filler played)`);
+            } else {
+              console.log(`[CallAgent] filler skipped, first token in ${elapsedSinceSubmit}ms`);
+            }
+
             this.debugMetrics.timeToFirstTokenMs = ttftMs;
             this.notify();
           },
         }
       );
 
-      // Enqueue any remaining buffer text
+      // Enqueue any remaining buffer text immediately
       const remaining = sentenceBuffer.trim();
       if (remaining.length > 0) {
         if (!this.firstSentenceSpokenRecorded && this.endOfUserSpeechTimestamp) {
-          this.debugMetrics.timeToFirstSpokenSentenceMs =
-            Date.now() - this.endOfUserSpeechTimestamp;
+          const ttfsMs = Date.now() - this.endOfUserSpeechTimestamp;
+          this.debugMetrics.timeToFirstSpokenSentenceMs = ttfsMs;
           this.firstSentenceSpokenRecorded = true;
+          const ttftMs = this.debugMetrics.timeToFirstTokenMs ?? 0;
+          console.log(
+            `[CallAgent] Timing: end of speech -> LLM first token (${ttftMs}ms) -> first sentence spoken (${ttfsMs}ms)`
+          );
         }
         speakSentence(remaining);
       }
@@ -476,14 +672,26 @@ class CallAgentService {
       // Record assistant reply in history
       this.recordTurn('assistant', text);
 
-      // 5. When all sentences finish speaking, loop back to listening or wrap up
+      // 5. When all queued sentences finish speaking, start next session after 300 ms cool-down
       setTtsOnDone(() => {
         if (!this.isCallActive) return;
 
         if (this.auraTurnCount >= MAX_TURNS) {
           this.handleCallWrapUp();
-        } else if (!this.isMuted) {
-          this.startListeningCycle();
+          return;
+        }
+
+        if (this.tapToTalkMode) {
+          console.log('[CallAgent] Assistant finished speaking in Tap-to-Talk mode -> idle');
+          this.micActive = false;
+          this.setState('idle');
+          return;
+        }
+
+        if (!this.isMuted) {
+          console.log('[CallAgent] Assistant finished speaking, waiting 300ms before starting listening');
+          this.setState('idle');
+          this.scheduleListening('TTS finished', 300);
         } else {
           this.setState('idle');
         }
