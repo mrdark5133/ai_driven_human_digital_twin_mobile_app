@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,50 @@ import { StressBarChart } from '../../components/StressBarChart';
 import { InterventionCard } from '../../components/InterventionCard';
 import { DataService } from '../../services/dataService';
 import { InsightsTimeframe, AIRecommendation } from '../../types';
+import { getRiskAssessment, RiskAssessment, RiskBand } from '../../src/services/riskModel';
 
 export default function InsightsScreen() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('week');
   const [directiveCategory, setDirectiveCategory] = useState<string>('all');
+  const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
+  const [showAboutModel, setShowAboutModel] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getRiskAssessment().then((res) => {
+      if (active) setRiskAssessment(res);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const band: RiskBand = riskAssessment?.band || 'Low';
+  const bandColor =
+    band === 'High' ? colors.error : band === 'Moderate' ? colors.warning : colors.tertiary;
+
+  // Group features by source for small readable chips
+  const sourceGroups = useMemo(() => {
+    if (!riskAssessment) return {};
+    const groups: Record<string, string[]> = {};
+    const labels: Record<string, string> = {
+      age: 'Age',
+      bmi_level: 'BMI',
+      heart_rate: 'HR',
+      daily_steps: 'Steps',
+      sleep_duration: 'Sleep',
+      quality_of_sleep: 'Quality',
+      stress_level: 'Stress',
+      physical_activity: 'Activity',
+    };
+    Object.entries(riskAssessment.sources).forEach(([feat, src]) => {
+      const srcName =
+        src === 'profile' ? 'Profile' : src === 'watch' ? 'Watch' : src === 'call' ? 'Call' : 'Demo';
+      if (!groups[srcName]) groups[srcName] = [];
+      groups[srcName].push(labels[feat] || feat);
+    });
+    return groups;
+  }, [riskAssessment]);
 
   const chartData = DataService.getInsightsChartData(timeframe);
   const recommendations = DataService.getRecommendations(directiveCategory);
@@ -102,50 +142,156 @@ export default function InsightsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Health Risk Score Card */}
+        {/* Sleep & Lifestyle Risk Card */}
         <View style={styles.riskCard}>
           <View style={styles.riskHeader}>
             <View style={styles.riskHeaderLeft}>
               <View style={styles.riskIconRow}>
-                <MaterialIcons name="timeline" size={16} color={colors.primary} />
-                <Text style={styles.riskTitle}>Health Risk Score</Text>
+                <MaterialIcons name="bedtime" size={18} color={colors.primary} />
+                <Text style={styles.riskTitle}>Sleep & Lifestyle Risk</Text>
               </View>
             </View>
 
             <View style={styles.badgeGroup}>
-              <View style={styles.demoPill}>
-                <Text style={styles.demoText}>Demo data</Text>
-              </View>
-              <View style={styles.riskScoreBadge}>
-                <View style={styles.riskDot} />
-                <Text style={styles.riskScoreText}>Low risk</Text>
+              {riskAssessment?.isDemo && (
+                <View style={styles.demoPill}>
+                  <Text style={styles.demoText}>Based partly on demo data</Text>
+                </View>
+              )}
+              <View style={[styles.riskScoreBadge, { backgroundColor: bandColor + '22' }]}>
+                <View style={[styles.riskDot, { backgroundColor: bandColor }]} />
+                <Text style={[styles.riskScoreText, { color: bandColor }]}>
+                  {band} ({riskAssessment?.percent ?? 18}%)
+                </Text>
               </View>
             </View>
           </View>
 
-          {/* Comparative Scale Gauge */}
+          {/* Comparative Horizontal Bar Gauge */}
           <View style={styles.gaugeContainer}>
             <View style={styles.gaugeScaleLabels}>
-              <Text style={styles.scaleStart}>Low</Text>
-              <Text style={styles.scaleEnd}>High</Text>
+              <Text style={styles.scaleStart}>Low (&lt;35%)</Text>
+              <Text style={styles.scaleMid}>Moderate (35-65%)</Text>
+              <Text style={styles.scaleEnd}>High (&gt;65%)</Text>
             </View>
 
             <View style={styles.gaugeTrack}>
-              <View style={styles.gaugeGradientBar} />
+              <View
+                style={[
+                  styles.gaugeGradientBar,
+                  {
+                    width: `${Math.min(Math.max(riskAssessment?.percent ?? 18, 5), 100)}%`,
+                    backgroundColor: bandColor,
+                  },
+                ]}
+              />
               <View
                 style={[
                   styles.gaugePointer,
-                  { left: `${Math.min(Math.max(chartData.riskPercent, 5), 95)}%` },
+                  {
+                    left: `${Math.min(Math.max(riskAssessment?.percent ?? 18, 4), 96)}%`,
+                    borderColor: bandColor,
+                  },
                 ]}
               />
             </View>
           </View>
 
-          {/* Description Box */}
-          <View style={styles.projectionBox}>
-            <MaterialIcons name="info-outline" size={18} color={colors.secondary} style={{ marginTop: 2 }} />
-            <Text style={styles.projectionText}>
-              Based on your last 7 days of heart rate and sleep.
+          {/* 2-3 Main Reasons */}
+          {riskAssessment?.topRiskFactors && riskAssessment.topRiskFactors.length > 0 && (
+            <View style={styles.reasonsContainer}>
+              <Text style={styles.factorSectionTitle}>Main contributors:</Text>
+              <View style={styles.factorRows}>
+                {riskAssessment.topRiskFactors.map((rf, idx) => (
+                  <View key={idx} style={styles.factorPill}>
+                    <MaterialIcons name="trending-up" size={13} color={colors.warning} />
+                    <Text style={styles.factorPillText}>{rf.label}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* What helps line */}
+          {riskAssessment?.protectiveFactors && riskAssessment.protectiveFactors.length > 0 && (
+            <View style={styles.whatHelpsBox}>
+              <MaterialIcons name="check-circle" size={14} color={colors.tertiary} />
+              <Text style={styles.whatHelpsText}>
+                <Text style={styles.whatHelpsBold}>What helps: </Text>
+                {riskAssessment.protectiveFactors.map((pf) => pf.label).join(', ')}
+              </Text>
+            </View>
+          )}
+
+          {/* Input Source Chips */}
+          <View style={styles.sourcesContainer}>
+            <Text style={styles.sourcesLabel}>Sources:</Text>
+            <View style={styles.chipsRow}>
+              {Object.entries(sourceGroups).map(([src, feats]) => (
+                <View key={src} style={styles.sourceChip}>
+                  <Text style={styles.sourceChipText}>
+                    <Text style={styles.sourceChipBold}>{src}:</Text> {feats.join(', ')}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* About this model expandable section */}
+          <TouchableOpacity
+            style={styles.aboutToggleRow}
+            onPress={() => setShowAboutModel(!showAboutModel)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.aboutToggleLeft}>
+              <MaterialIcons name="science" size={15} color={colors.primary} />
+              <Text style={styles.aboutToggleText}>About this on-device model</Text>
+            </View>
+            <MaterialIcons
+              name={showAboutModel ? 'expand-less' : 'expand-more'}
+              size={18}
+              color={colors.primary}
+            />
+          </TouchableOpacity>
+
+          {showAboutModel && (
+            <View style={styles.aboutModelBox}>
+              <Text style={styles.aboutModelDesc}>
+                Trained on the public Sleep Health & Lifestyle dataset using logistic regression
+                to evaluate risk factors against reported sleep disorder prevalence (insomnia & sleep apnea).
+              </Text>
+              <View style={styles.modelMetricsRow}>
+                <View style={styles.modelMetricBadge}>
+                  <Text style={styles.modelMetricVal}>
+                    {(riskAssessment?.metrics.cv_accuracy ? (riskAssessment.metrics.cv_accuracy * 100).toFixed(1) : '78.7')}%
+                  </Text>
+                  <Text style={styles.modelMetricLabel}>5-Fold CV Accuracy</Text>
+                </View>
+                <View style={styles.modelMetricBadge}>
+                  <Text style={styles.modelMetricVal}>
+                    {riskAssessment?.metrics.cv_roc_auc ?? '0.782'}
+                  </Text>
+                  <Text style={styles.modelMetricLabel}>ROC-AUC Score</Text>
+                </View>
+                <View style={styles.modelMetricBadge}>
+                  <Text style={styles.modelMetricVal}>
+                    {riskAssessment?.metrics.rows_used ?? 122}
+                  </Text>
+                  <Text style={styles.modelMetricLabel}>Unique Rows</Text>
+                </View>
+              </View>
+              <Text style={styles.aboutDisclaimerText}>
+                {riskAssessment?.disclaimer ||
+                  'Lifestyle risk indicator trained on a small public dataset. Not a medical diagnosis.'}
+              </Text>
+            </View>
+          )}
+
+          {/* Always-on disclaimer */}
+          <View style={styles.alwaysDisclaimerRow}>
+            <MaterialIcons name="info-outline" size={13} color={colors.outline} />
+            <Text style={styles.alwaysDisclaimerText}>
+              Lifestyle risk indicator, not medical advice.
             </Text>
           </View>
         </View>
@@ -459,13 +605,19 @@ const styles = StyleSheet.create({
   scaleStart: {
     ...typography.bodySm,
     color: colors.tertiary,
-    fontSize: 11,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  scaleMid: {
+    ...typography.bodySm,
+    color: colors.warning,
+    fontSize: 10,
     fontWeight: '600',
   },
   scaleEnd: {
     ...typography.bodySm,
-    color: colors.onSurfaceVariant,
-    fontSize: 11,
+    color: colors.error,
+    fontSize: 10,
     fontWeight: '600',
   },
   gaugeTrack: {
@@ -515,6 +667,168 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     flex: 1,
+  },
+  reasonsContainer: {
+    gap: 6,
+    paddingTop: 2,
+  },
+  factorSectionTitle: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+    fontWeight: '600',
+  },
+  factorRows: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  factorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(251, 191, 36, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.25)',
+  },
+  factorPillText: {
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.onSurface,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  whatHelpsBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(69, 223, 164, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: 'rgba(69, 223, 164, 0.2)',
+  },
+  whatHelpsText: {
+    ...typography.bodySm,
+    color: colors.onSurface,
+    fontSize: 11.5,
+    flex: 1,
+  },
+  whatHelpsBold: {
+    fontWeight: '700',
+    color: colors.tertiary,
+  },
+  sourcesContainer: {
+    gap: 6,
+    paddingTop: 2,
+  },
+  sourcesLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10.5,
+    color: colors.outline,
+    fontWeight: '600',
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  sourceChip: {
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: colors.outlineVariant,
+  },
+  sourceChipText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 10,
+    color: colors.onSurfaceVariant,
+  },
+  sourceChipBold: {
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  aboutToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    marginTop: 2,
+  },
+  aboutToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  aboutToggleText: {
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.primary,
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  aboutModelBox: {
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    borderRadius: radii.md,
+    padding: 10,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(76, 215, 246, 0.15)',
+  },
+  aboutModelDesc: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  modelMetricsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  modelMetricBadge: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerHighest,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: radii.sm,
+    alignItems: 'center',
+  },
+  modelMetricVal: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  modelMetricLabel: {
+    ...typography.labelCapsXs,
+    color: colors.outline,
+    fontSize: 8,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  aboutDisclaimerText: {
+    ...typography.bodySm,
+    color: colors.outline,
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+  alwaysDisclaimerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+  },
+  alwaysDisclaimerText: {
+    fontFamily: 'Inter_400Regular',
+    color: colors.outline,
+    fontSize: 10,
   },
   streamSection: {
     gap: 12,

@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "name": "sleep_lifestyle_risk_logreg",
+  "target": "Sleep disorder present (Insomnia or Sleep Apnea) in the training data",
+  "features": [
+    "age",
+    "sleep_duration",
+    "quality_of_sleep",
+    "physical_activity",
+    "stress_level",
+    "bmi_level",
+    "heart_rate",
+    "daily_steps"
+  ],
+  "mean": [
+    41.49180327868852,
+    7.111475409836066,
+    7.221311475409836,
+    58.71311475409836,
+    5.491803278688525,
+    0.5,
+    70.99180327868852,
+    6682.786885245901
+  ],
+  "scale": [
+    8.836628225037547,
+    0.7807307129328493,
+    1.2181166266404146,
+    20.335094234141668,
+    1.7379368852286987,
+    0.590220853357203,
+    4.729565019404652,
+    1728.4358807680323
+  ],
+  "coef": [
+    0.6743992831462935,
+    -0.18472130108903018,
+    -0.512910530428836,
+    0.015477667063130043,
+    -0.019072440117057866,
+    0.849905679621423,
+    0.16813477862330284,
+    -0.09417782888217667
+  ],
+  "intercept": -0.453678619829858,
+  "ranges": {
+    "age": [
+      27.0,
+      59.0
+    ],
+    "sleep_duration": [
+      5.8,
+      8.5
+    ],
+    "quality_of_sleep": [
+      4.0,
+      9.0
+    ],
+    "physical_activity": [
+      30.0,
+      90.0
+    ],
+    "stress_level": [
+      3.0,
+      8.0
+    ],
+    "bmi_level": [
+      0.0,
+      2.0
+    ],
+    "heart_rate": [
+      65.0,
+      86.0
+    ],
+    "daily_steps": [
+      3000.0,
+      10000.0
+    ]
+  },
+  "bmi_levels": {
+    "normal": 0,
+    "overweight": 1,
+    "obese": 2
+  },
+  "bands": {
+    "low_max": 0.35,
+    "moderate_max": 0.65
+  },
+  "metrics": {
+    "cv_accuracy": 0.7869,
+    "cv_roc_auc": 0.7818,
+    "cv_precision": 0.7273,
+    "cv_recall": 0.7843,
+    "majority_baseline_accuracy": 0.582,
+    "rows_used": 122,
+    "at_risk_share": 0.418
+  },
+  "disclaimer": "Lifestyle risk indicator trained on a small public dataset. Not a medical diagnosis."
+}

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ScrollView, View, Text, Pressable, StyleSheet, RefreshControl } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { MaterialCommunityIcons as Icon } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
+import { getRiskAssessment, RiskBand } from '../../src/services/riskModel';
 import AppHeader from '../../components/AppHeader';
 import ScoreRing from '../../components/ScoreRing';
 import { colors, radius, space, type } from '../../theme/tokens';
@@ -103,18 +104,21 @@ export default function Home() {
   const [vitals, setVitals] = useState<CurrentVitals | null>(null);
   const [stepsData, setStepsData] = useState<StepsDataPoint | null>(null);
   const [todayHeartRates, setTodayHeartRates] = useState<HeartRateDataPoint[] | null>(null);
+  const [riskBand, setRiskBand] = useState<RiskBand>('Low');
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [vitalsRes, stepsRes, hrHistoryRes] = await Promise.all([
+      const [vitalsRes, stepsRes, hrHistoryRes, riskRes] = await Promise.all([
         getCurrentVitals(),
         getTodaySteps(),
         getTodayHeartRates(),
+        getRiskAssessment().catch(() => null),
       ]);
       setVitals(vitalsRes);
       setStepsData(stepsRes);
       setTodayHeartRates(hrHistoryRes);
+      if (riskRes) setRiskBand(riskRes.band);
     } catch (err) {
       console.warn('[HomeScreen] Failed to fetch real data:', err);
     } finally {
@@ -229,9 +233,30 @@ export default function Home() {
             <Text style={[s.bodySm, { marginVertical: space.sm }]}>
               Demo score • Risk model in training
             </Text>
-            <View style={s.pill}>
-              <View style={s.pillDot} />
-              <Text style={[s.label, { color: colors.primary }]}>Baseline reference</Text>
+            <View style={s.pillRow}>
+              <View style={s.pill}>
+                <View style={s.pillDot} />
+                <Text style={[s.label, { color: colors.primary }]}>Baseline reference</Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/(tabs)/insights')}
+                style={s.riskPill}
+              >
+                <View
+                  style={[
+                    s.pillDot,
+                    {
+                      backgroundColor:
+                        riskBand === 'High'
+                          ? colors.red
+                          : riskBand === 'Moderate'
+                          ? colors.amber
+                          : colors.green,
+                    },
+                  ]}
+                />
+                <Text style={s.riskPillText}>Risk: {riskBand}</Text>
+              </Pressable>
             </View>
           </View>
           <ScoreRing score={78} />
@@ -423,6 +448,29 @@ const s = StyleSheet.create({
   scoreCard: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   scoreHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   overall: { ...type.labelSm, color: colors.primary },
+  pillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    marginTop: space.xs,
+    flexWrap: 'wrap',
+  },
+  riskPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: space.sm,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    backgroundColor: colors.cardHigh,
+    borderWidth: 1,
+    borderColor: colors.outline,
+  },
+  riskPillText: {
+    ...type.label,
+    fontSize: 10,
+    color: colors.text,
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',

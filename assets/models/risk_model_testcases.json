@@ -1,0 +1,132 @@
+[
+  {
+    "input": {
+      "age": 42.0,
+      "sleep_duration": 6.8,
+      "quality_of_sleep": 6.0,
+      "physical_activity": 45.0,
+      "stress_level": 7.0,
+      "bmi_level": 1.0,
+      "heart_rate": 78.0,
+      "daily_steps": 5000.0
+    },
+    "probability": 0.7697478859030752
+  },
+  {
+    "input": {
+      "age": 51.0,
+      "sleep_duration": 8.5,
+      "quality_of_sleep": 9.0,
+      "physical_activity": 30.0,
+      "stress_level": 3.0,
+      "bmi_level": 0.0,
+      "heart_rate": 65.0,
+      "daily_steps": 5000.0
+    },
+    "probability": 0.16228601322763586
+  },
+  {
+    "input": {
+      "age": 44.0,
+      "sleep_duration": 6.5,
+      "quality_of_sleep": 6.0,
+      "physical_activity": 45.0,
+      "stress_level": 7.0,
+      "bmi_level": 1.0,
+      "heart_rate": 72.0,
+      "daily_steps": 6000.0
+    },
+    "probability": 0.7618265774881171
+  },
+  {
+    "input": {
+      "age": 44.0,
+      "sleep_duration": 6.4,
+      "quality_of_sleep": 6.0,
+      "physical_activity": 45.0,
+      "stress_level": 7.0,
+      "bmi_level": 1.0,
+      "heart_rate": 72.0,
+      "daily_steps": 6000.0
+    },
+    "probability": 0.7660929906989483
+  },
+  {
+    "input": {
+      "age": 52.0,
+      "sleep_duration": 8.4,
+      "quality_of_sleep": 9.0,
+      "physical_activity": 30.0,
+      "stress_level": 3.0,
+      "bmi_level": 0.0,
+      "heart_rate": 65.0,
+      "daily_steps": 5000.0
+    },
+    "probability": 0.1763408863931946
+  },
+  {
+    "input": {
+      "age": 48.0,
+      "sleep_duration": 5.9,
+      "quality_of_sleep": 6.0,
+      "physical_activity": 90.0,
+      "stress_level": 8.0,
+      "bmi_level": 1.0,
+      "heart_rate": 75.0,
+      "daily_steps": 10000.0
+    },
+    "probability": 0.8208227010308405
+  },
+  {
+    "input": {
+      "age": 29.0,
+      "sleep_duration": 6.1,
+      "quality_of_sleep": 6.0,
+      "physical_activity": 30.0,
+      "stress_level": 8.0,
+      "bmi_level": 0.0,
+      "heart_rate": 70.0,
+      "daily_steps": 8000.0
+    },
+    "probability": 0.1780136493427244
+  },
+  {
+    "input": {
+      "age": 41.0,
+      "sleep_duration": 7.3,
+      "quality_of_sleep": 8.0,
+      "physical_activity": 70.0,
+      "stress_level": 6.0,
+      "bmi_level": 0.0,
+      "heart_rate": 72.0,
+      "daily_steps": 6200.0
+    },
+    "probability": 0.1796784564480731
+  },
+  {
+    "input": {
+      "age": 50.0,
+      "sleep_duration": 8.3,
+      "quality_of_sleep": 9.0,
+      "physical_activity": 30.0,
+      "stress_level": 3.0,
+      "bmi_level": 0.0,
+      "heart_rate": 65.0,
+      "daily_steps": 5000.0
+    },
+    "probability": 0.15838219095065917
+  },
+  {
+    "input": {
+      "age": 53.0,
+      "sleep_duration": 8.4,
+      "quality_of_sleep": 9.0,
+      "physical_activity": 30.0,
+      "stress_level": 3.0,
+      "bmi_level": 0.0,
+      "heart_rate": 65.0,
+      "daily_steps": 5000.0
+    },
+    "probability": 0.1877008594369937
+  }
+]

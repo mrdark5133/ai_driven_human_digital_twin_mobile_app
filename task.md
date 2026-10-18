@@ -1,47 +1,40 @@
-# Task Checklist: Fix 2 Bugs & Add Scheduled In-App Calls (AURA)
+# Task Checklist: On-Device Sleep & Lifestyle Risk Model
 
-## Part A: Fix Speech Recognition (JS only)
-- [x] Inspect & verify `expo-speech-recognition` APIs for `getSupportedLocales` and `androidTriggerOfflineModelDownload`
-- [x] Update `src/services/voice/asr.ts`:
-  - [x] Default locale = "en-IN", retain "ta-IN" toggle
-  - [x] Add `checkOfflineLocaleInstalled(locale)` using `getSupportedLocales`
-  - [x] Set `requiresOnDeviceRecognition` ONLY if the locale is installed offline, else false (online recognition)
-  - [x] Export `triggerOfflineModelDownload(locale)` wrapping `androidTriggerOfflineModelDownload`
-  - [x] Fix retry loop: silently restart on "no-speech" / "speech-timeout" without incrementing error count. On real errors, retry max 3 times with backoff (500ms, 1s, 2s), then report friendly error
-- [x] Update `app/call.tsx`:
-  - [x] Small "Download offline speech pack" button shown only when offline pack for active locale is missing
-  - [x] Clear label for locale switcher ("en-IN (Tanglish)" vs "ta-IN (Tamil)")
-  - [x] Ensure debug telemetry (1st token, 1st spoken, tokens/sec) updates after each turn
-- [x] Verify Part A type safety (`npx tsc --noEmit` passed with 0 errors)
+## Phase A: Train and export the model (Python)
+- [x] Check that `ml/train_risk_model.py` and CSV in `ml/data/` exist
+- [x] Run `python ml/train_risk_model.py --csv "ml/data/Sleep_health_and_lifestyle_dataset.csv"`
+- [x] Verify cross-validation metrics (cv_roc_auc >= 0.65: 0.7818, cv_accuracy: 0.7869)
+- [x] Copy `ml/output/risk_model.json` to `assets/models/risk_model.json` and `ml/output/risk_model_testcases.json` to `assets/models/risk_model_testcases.json`
 
-## Part B: On-Device LLM for Assistant Text Chat (JS only)
-- [x] Update `src/services/voice/llm.ts`:
-  - [x] Implement robust Singleton lock (`acquireLlmLock`) for LlamaContext so it never initializes twice or runs concurrent generations
-  - [x] Export helper for streaming text chat with custom system prompts & generation params
-- [x] Update `app/(tabs)/assistant.tsx`:
-  - [x] Replace hardcoded reply with on-device LLM stream from `src/services/voice/llm.ts`
-  - [x] Build 3-4 line vitals "context card" from `DataService.getVitals()` (HR, sleep, steps, stress) in the system prompt
-  - [x] Chat system prompt: friendly, 2-3 short sentences, match user's Tanglish or English style, no diagnosis / medical advice
-  - [x] Show typing indicator, stream tokens into bubble
-  - [x] Handle errors: model not downloaded -> show card with download button; generation failed -> friendly retry
-  - [x] Route suggested-question chips through the LLM path
-  - [x] Keep "Demo data" pill/behavior intact
-- [x] Verify Part B type safety (`npx tsc --noEmit` passed with 0 errors)
+## Phase B: TypeScript predictor
+- [x] Create `src/services/riskModelCore.ts`:
+  - [x] Pure TypeScript, no React Native imports
+  - [x] `RiskInputs` type (`age`, `sleep_duration`, `quality_of_sleep`, `physical_activity`, `stress_level`, `bmi_level`, `heart_rate`, `daily_steps`)
+  - [x] `predictRiskFromModel(model, inputs)`: clamp to ranges, standardize with mean/scale, $z = \text{intercept} + \sum (\text{coef} \times \text{std})$, $\text{probability} = 1 / (1 + e^{-z})$, calculate feature contributions
+- [x] Create `src/services/riskModel.ts`:
+  - [x] Import `assets/models/risk_model.json`
+  - [x] `buildRiskInputs()`: gather profile age/height/weight (BMI < 25 -> 0, < 30 -> 1, else 2), live heart rate (watch/Health Connect), 7d/daily steps, sleep hours, sleep score/10, stress index/10, active minutes or steps/100; tag sources ("profile" | "watch" | "call" | "demo")
+  - [x] `getRiskAssessment()`: returns `{ probability, percent, band, topRiskFactors, protectiveFactors, inputs, sources, isDemo }`
+  - [x] `getRiskContextLine()`: short single line for Pallavi context card
+- [x] Create verification script `scripts/verifyRiskModel.ts` and verify with `npx --yes tsx scripts/verifyRiskModel.ts` (pass/fail per test case, diff < 1e-6)
 
-## Part C: Scheduled In-App Calls & Call History
-- [x] C0: Verify `@notifee/react-native` vs `expo-notifications` compatibility on Expo SDK 57 / RN 0.86 New Architecture:
-  - `@notifee/react-native` is archived by Invertase, fails Gradle compilation on RN 0.86 (`app.notifee:core:+`), and lacks New Architecture support.
-  - Safely fallen back to SDK-compatible `expo-notifications`.
-  - Lazy loading implemented inside try/catch behind `isNotificationAvailable()` flag to ensure current APK without native module never crashes on import. Shows "Update the app build to enable scheduled calls" notice.
-- [x] C1: Create `src/config/callSchedule.ts` with MORNING (08:45) and EVENING (21:00) slots
-- [x] C2: Create `src/services/callScheduler.ts` with notification channels, permissions, daily triggers, handlers, and `testCallIn(seconds)`
-- [x] C3: Create `app/incoming-call.tsx` (WhatsApp/Telegram style incoming call screen with pulsing orb, vibration, Answer/Decline, 45s timeout)
-- [x] C4: Update `app/call.tsx` and `src/services/voice/callAgent.ts` for scheduled call flow:
-  - [x] Instant Tanglish opener spoken first
-  - [x] Morning vs Evening goal in system prompt
-  - [x] Automatic end after MAX_TURNS = 6 with warm goodbye
-  - [x] Turn recording and history saving
-- [x] C5: Create `src/services/callHistory.ts` with AsyncStorage persistence and `reconcile()` on start/resume
-- [x] C6: Create `app/call-history.tsx` and add History icon button to `app/(tabs)/assistant.tsx`
-- [x] Android config / plugins / permissions (`app.json` and `plugins/withAuraCallConfig.js` for `showWhenLocked` + `turnScreenOn`)
-- [x] Verification: `npx tsc --noEmit` (0 errors) and `npx expo-doctor` (21/21 passed)
+## Phase C: Show it in the app
+- [x] Add "Sleep & Lifestyle Risk" card to `app/(tabs)/insights.tsx` near top:
+  - [x] Percent and band (Low = green, Moderate = amber, High = red)
+  - [x] Horizontal bar indicator
+  - [x] 2-3 "Main reasons" and 1 "What helps" line
+  - [x] Source chips for inputs (Profile / Watch / Call / Demo)
+  - [x] "About this model" expandable section / modal with training data info, CV metrics, and disclaimer
+  - [x] Demo notice when `isDemo` is true ("Based partly on demo data")
+  - [x] Disclaimer: "Lifestyle risk indicator, not medical advice."
+- [x] Home screen: add small risk indicator pill linking directly to Insights
+
+## Phase D: Give it to Pallavi
+- [x] Add `getRiskContextLine()` to the context card used by assistant chat (`app/(tabs)/assistant.tsx`) and voice call prompts (`src/services/voice/callAgent.ts`, `llm.ts`)
+- [x] Update system prompt instructions: "If Dark asks about his health risk, explain it simply in the same style he writes (Tanglish or English), using only the risk line you were given. It is a lifestyle indicator, not a diagnosis. Suggest one small habit. Never invent numbers."
+- [x] Ensure LLM prefix warm-up uses identical context card text for KV cache validity
+- [x] Ensure risk line does not appear in scheduled call openers
+
+## Verification & Strict Checks
+- [x] Run `npx tsc --noEmit` (0 errors)
+- [x] Verify test checklist

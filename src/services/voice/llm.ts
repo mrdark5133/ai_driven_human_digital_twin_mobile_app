@@ -7,6 +7,7 @@ import {
   TANGALISH_FEW_SHOTS,
   USER_TANGALISH_HINT,
   AURA_STOP_TOKENS,
+  buildVoiceSystemPrompt,
 } from './persona';
 
 export interface ChatTurn {
@@ -201,7 +202,7 @@ export async function streamLlmResponse(
 
     // Keep only the last 4 turns (2 user, 2 assistant) to minimize context processing latency
     const recentTurns = conversationHistory.slice(-4);
-    const systemContent = options?.systemPrompt || AURA_PERSONA_PROMPT;
+    const systemContent = options?.systemPrompt || buildVoiceSystemPrompt();
 
     // PART 1.a: Measure system prompt in tokens and log it
     try {
@@ -316,9 +317,7 @@ export async function warmupLlmContext(options?: WarmupOptions): Promise<void> {
 
     let systemContent = options?.systemPrompt;
     if (!systemContent) {
-      if (options?.slot === 'morning') systemContent = MORNING_GOAL;
-      else if (options?.slot === 'evening') systemContent = EVENING_GOAL;
-      else systemContent = AURA_PERSONA_PROMPT;
+      systemContent = buildVoiceSystemPrompt(options?.slot);
     }
 
     // Exact same prefix: System prompt + 4 Few-shot turns + dummy user turn with hint

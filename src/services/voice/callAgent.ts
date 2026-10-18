@@ -16,7 +16,7 @@ import { speakSentence, stopTts, setTtsOnDone } from './tts';
 import { CallSlotId } from '../../config/callSchedule';
 import { appendTurnToCallEntry, updateCallEntry } from '../callHistory';
 import { ASSISTANT_NAME } from '../../config/appConfig';
-import { MORNING_GOAL, EVENING_GOAL } from './persona';
+import { buildVoiceSystemPrompt } from './persona';
 
 export type CallAgentState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -619,12 +619,7 @@ class CallAgentService {
       let sentenceBuffer = '';
       this.aiResponse = '';
 
-      let customSystemPrompt: string | undefined;
-      if (this.activeSlot === 'morning') {
-        customSystemPrompt = MORNING_GOAL;
-      } else if (this.activeSlot === 'evening') {
-        customSystemPrompt = EVENING_GOAL;
-      }
+      const customSystemPrompt = buildVoiceSystemPrompt(this.activeSlot);
 
       const { text, metrics } = await streamLlmResponse(
         this.conversationHistory,

@@ -21,6 +21,7 @@ import { ChatMessage } from '../../types';
 import { streamLlmResponse, ChatTurn, warmupLlmContext } from '../../src/services/voice/llm';
 import { isModelDownloaded, downloadModel } from '../../src/services/voice/modelManager';
 import { ASSISTANT_NAME } from '../../src/config/appConfig';
+import { getCachedRiskContextLine, getRiskContextLine } from '../../src/services/riskModel';
 
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(DataService.getChatHistory());
@@ -42,12 +43,14 @@ export default function AssistantScreen() {
    */
   const buildSystemPromptWithVitals = (): string => {
     const vitals = DataService.getVitals();
+    const riskLine = getCachedRiskContextLine();
     const vitalsCard = [
       `CURRENT USER VITALS:`,
       `- Heart Rate: ${vitals.heartRate} BPM (${vitals.heartRateTrend || 'nominal'})`,
       `- Sleep: ${vitals.sleepHours}h ${vitals.sleepMinutes}m (Sleep Score: ${vitals.sleepScore}%)`,
       `- Activity: ${vitals.steps.toLocaleString()} / ${vitals.stepGoal.toLocaleString()} steps`,
       `- Stress Index: ${vitals.stressIndex}/100 (${vitals.stressStatus || 'Normal'})`,
+      `- ${riskLine}`,
     ].join('\n');
 
     return `You are ${ASSISTANT_NAME}, an empathetic, caring personal digital twin and health companion for Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
@@ -56,11 +59,13 @@ CRITICAL RULES:
 1. Use ONLY the exact vital numbers listed in the card above. NEVER invent or hallucinate data or numbers.
 2. Reply in 2-3 friendly, concise sentences.
 3. Match the language and style the user writes (if user writes in casual Tanglish, reply in warm Tanglish; if in English, reply in friendly English).
-4. Do NOT give medical diagnosis or clinical prescriptions. Suggest healthy lifestyle observations.`;
+4. Do NOT give medical diagnosis or clinical prescriptions. Suggest healthy lifestyle observations.
+5. If Dark asks about his health risk, explain it simply in the same style he writes (Tanglish or English), using only the risk line you were given. It is a lifestyle indicator, not a diagnosis. Suggest one small habit. Never invent numbers.`;
   };
 
   useEffect(() => {
     let active = true;
+    getRiskContextLine().catch(() => {});
     isModelDownloaded().then((ready) => {
       if (active) {
         setIsModelReady(ready);
