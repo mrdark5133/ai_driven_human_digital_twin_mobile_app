@@ -11,8 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.aidrivenhuman.app",
       "infoPlist": {
-        "NSSpeechRecognitionUsageDescription": "Allow AI-Driven Human to recognize speech for voice conversations with AURA.",
-        "NSMicrophoneUsageDescription": "Allow AI-Driven Human to use the microphone for voice conversations with AURA."
+        "NSSpeechRecognitionUsageDescription": "Allow AI-Driven Human to recognize speech for voice conversations with Pallavi.",
+        "NSMicrophoneUsageDescription": "Allow AI-Driven Human to use the microphone for voice conversations with Pallavi."
       }
     },
     "android": {
@@ -64,8 +64,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow AI-Driven Human to use the microphone for voice conversations with AURA.",
-          "speechRecognitionPermission": "Allow AI-Driven Human to recognize speech for voice conversations with AURA.",
+          "microphonePermission": "Allow AI-Driven Human to use the microphone for voice conversations with Pallavi.",
+          "speechRecognitionPermission": "Allow AI-Driven Human to recognize speech for voice conversations with Pallavi.",
           "androidSpeechServicePackages": [
             "com.google.android.googlequicksearchbox"
           ]

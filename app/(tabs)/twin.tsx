@@ -19,6 +19,7 @@ import BodyFigure, { Organ } from '../../components/BodyFigure';
 import { colors, radius, space, type } from '../../theme/tokens';
 import { getCurrentVitals, CurrentVitals, VitalMetric } from '../../src/services/vitals';
 import { saveManualReading } from '../../src/services/manualReadings';
+import { ASSISTANT_NAME } from '../../src/config/appConfig';
 
 // Toggle for SpO2 sensor support
 const showSpO2 = true;
@@ -624,7 +625,7 @@ export default function Twin() {
 
           <View style={[s.hero, { flexDirection: 'row', alignItems: 'center' }]}>
             <View style={{ flex: 1, gap: 4 }}>
-              <Text style={s.sleepTitle}>Waiting for Aura's call</Text>
+              <Text style={s.sleepTitle}>Waiting for {ASSISTANT_NAME}'s call</Text>
               <Text style={s.sleepSub}>
                 Sleep will come from the calling agent later.
               </Text>

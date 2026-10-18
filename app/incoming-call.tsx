@@ -14,6 +14,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { colors, radius, space, type } from '../theme/tokens';
 import { CallSlotId, CALL_SLOTS } from '../src/config/callSchedule';
 import { updateCallEntry, saveCallEntry } from '../src/services/callHistory';
+import { ASSISTANT_NAME } from '../src/config/appConfig';
 
 export default function IncomingCallScreen() {
   const router = useRouter();
@@ -116,8 +117,8 @@ export default function IncomingCallScreen() {
           <Text style={styles.badgeText}>{slotLabel.toUpperCase()}</Text>
         </View>
 
-        <Text style={styles.callerName}>AURA</Text>
-        <Text style={styles.callingStatusText}>AURA is calling...</Text>
+        <Text style={styles.callerName}>{ASSISTANT_NAME}</Text>
+        <Text style={styles.callingStatusText}>{ASSISTANT_NAME} is calling...</Text>
       </View>
 
       {/* Central Pulsing Calling Orb */}

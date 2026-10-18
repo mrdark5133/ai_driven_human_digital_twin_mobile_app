@@ -15,6 +15,7 @@ export interface AsrCallbacks {
   onFinalResult?: (transcript: string) => void;
   onSpeechStart?: () => void;
   onSpeechEnd?: () => void;
+  onEnd?: () => void;
   onSilence?: () => void;
   onError?: (error: string, code?: string) => void;
   onVolumeChange?: (volume: number) => void;
@@ -25,6 +26,9 @@ let isCurrentlyListening = false;
 let callbacks: AsrCallbacks = {};
 let cleanupSubscriptions: (() => void)[] = [];
 let accumulatedTranscript = '';
+let lastInterimTranscript = '';
+let hasDeliveredFinal = false;
+let interimFallbackTimer: any = null;
 
 /**
  * Gets the current ASR language locale.
@@ -38,6 +42,13 @@ export function getAsrLocale(): AsrLocale {
  */
 export function setAsrLocale(locale: AsrLocale): void {
   activeLocale = locale;
+}
+
+/**
+ * Resets active ASR language locale back to default 'en-IN'.
+ */
+export function resetAsrLocale(): void {
+  activeLocale = DEFAULT_ASR_LOCALE;
 }
 
 /**
@@ -132,6 +143,7 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   // 1. Ensure permissions
   const hasPerm = await requestAsrPermissions();
   if (!hasPerm) {
+    console.log('[ASR] ASR error (not-allowed): Microphone or speech recognition permission was denied.');
     callbacks.onError?.('Microphone or speech recognition permission was denied.', 'not-allowed');
     return;
   }
@@ -142,7 +154,21 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   }
 
   accumulatedTranscript = '';
+  lastInterimTranscript = '';
+  hasDeliveredFinal = false;
+  clearTimeout(interimFallbackTimer);
   clearSubscriptions();
+
+  const deliverFinal = (text: string, source: string) => {
+    clearTimeout(interimFallbackTimer);
+    if (hasDeliveredFinal) return;
+    hasDeliveredFinal = true;
+    const trimmed = text.trim();
+    lastInterimTranscript = '';
+    if (!trimmed) return;
+    console.log(`[ASR] final result (${source}): "${trimmed}"`);
+    callbacks.onFinalResult?.(trimmed);
+  };
 
   // 3. Register native event listeners
   const subResult = ExpoSpeechRecognitionModule.addListener(
@@ -150,12 +176,22 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
     (event: ExpoSpeechRecognitionResultEvent) => {
       const topResult = event.results?.[0]?.transcript || '';
       if (!topResult.trim()) return;
+      const text = topResult.trim();
 
       if (event.isFinal) {
-        accumulatedTranscript = topResult.trim();
-        callbacks.onFinalResult?.(accumulatedTranscript);
+        deliverFinal(text, 'native isFinal');
       } else {
-        callbacks.onInterimResult?.(topResult.trim());
+        console.log(`[ASR] interim result: "${text}"`);
+        lastInterimTranscript = text;
+        callbacks.onInterimResult?.(text);
+
+        // Reset interim 1500ms fallback timer after every interim result
+        clearTimeout(interimFallbackTimer);
+        interimFallbackTimer = setTimeout(() => {
+          if (!hasDeliveredFinal && isCurrentlyListening && lastInterimTranscript.trim()) {
+            deliverFinal(lastInterimTranscript, '1500ms interim timeout');
+          }
+        }, 1500);
       }
     }
   );
@@ -175,7 +211,12 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   const subError = ExpoSpeechRecognitionModule.addListener(
     'error',
     (event: ExpoSpeechRecognitionErrorEvent) => {
+      clearTimeout(interimFallbackTimer);
       isCurrentlyListening = false;
+      const errCode = event.error || 'unknown';
+      const errMsg = event.message || `Speech recognition error: ${errCode}`;
+      console.log(`[ASR] ASR error (${errCode}): ${errMsg}`);
+
       // "no-speech" and "speech-timeout" are normal when user is silent
       const isSilence = event.error === 'no-speech' || event.error === 'speech-timeout';
       if (isSilence) {
@@ -183,15 +224,26 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
         return;
       }
 
-      callbacks.onError?.(
-        event.message || `Speech recognition error: ${event.error}`,
-        event.error
-      );
+      callbacks.onError?.(errMsg, errCode);
     }
   );
 
   const subEnd = ExpoSpeechRecognitionModule.addListener('end', () => {
+    console.log('[ASR] ASR end');
+    clearTimeout(interimFallbackTimer);
+    const wasListening = isCurrentlyListening;
     isCurrentlyListening = false;
+
+    if (!hasDeliveredFinal && wasListening) {
+      if (lastInterimTranscript.trim()) {
+        // If user spoke and there is an interim transcript with no final result after "end",
+        // deliver last interim transcript as final result to the LLM.
+        deliverFinal(lastInterimTranscript, 'end event fallback');
+      } else {
+        // The "end" event with no transcript at all: restart listening silently (not an error, not counted).
+        callbacks.onEnd?.();
+      }
+    }
   });
 
   cleanupSubscriptions = [
@@ -204,8 +256,8 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   ];
 
   // 4. Check if offline language pack is installed.
-  // CRITICAL FIX: Do NOT force on-device recognition unless the offline pack is actually installed!
   const isOfflineInstalled = await checkOfflineLocaleInstalled(activeLocale);
+  console.log(`[ASR] start (locale: ${activeLocale}, onDevice: ${isOfflineInstalled})`);
 
   // 5. Start recognition with appropriate online/offline options
   try {
@@ -225,10 +277,9 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
   } catch (err: any) {
     isCurrentlyListening = false;
     clearSubscriptions();
-    callbacks.onError?.(
-      `Failed to start speech recognizer: ${err?.message || String(err)}`,
-      'client'
-    );
+    const msg = `Failed to start speech recognizer: ${err?.message || String(err)}`;
+    console.log(`[ASR] ASR error (client): ${msg}`);
+    callbacks.onError?.(msg, 'client');
   }
 }
 
@@ -236,6 +287,7 @@ export async function startListening(customCallbacks?: AsrCallbacks): Promise<vo
  * Stops listening and finalizes speech input.
  */
 export async function stopListening(): Promise<void> {
+  clearTimeout(interimFallbackTimer);
   if (!isCurrentlyListening) return;
   isCurrentlyListening = false;
   try {
@@ -249,7 +301,10 @@ export async function stopListening(): Promise<void> {
  * Immediately cancels listening without waiting for final result.
  */
 export async function abortListening(): Promise<void> {
+  clearTimeout(interimFallbackTimer);
   isCurrentlyListening = false;
+  hasDeliveredFinal = true;
+  lastInterimTranscript = '';
   clearSubscriptions();
   try {
     ExpoSpeechRecognitionModule.abort();

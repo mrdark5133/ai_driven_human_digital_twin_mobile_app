@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { CALL_SLOTS, CallSlotId, MORNING_SLOT, EVENING_SLOT } from '../config/callSchedule';
 import { saveCallEntry, updateCallEntry } from './callHistory';
+import { ASSISTANT_NAME } from '../config/appConfig';
 
 const SETTINGS_KEY = '@ai_twin_call_schedule_settings';
 
@@ -85,15 +86,22 @@ export async function setupNotificationChannels(): Promise<void> {
   try {
     // 1. Android High-Importance Call Channel
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('aura-calls', {
-        name: 'AURA Calls',
-        description: 'Scheduled incoming check-in calls from AURA',
+      try {
+        if (Notifications.deleteNotificationChannelAsync) {
+          await Notifications.deleteNotificationChannelAsync('aura-calls');
+        }
+      } catch (delErr) {
+        // Channel might not exist or error deleting legacy channel
+      }
+
+      await Notifications.setNotificationChannelAsync('aura-calls-v2', {
+        name: `${ASSISTANT_NAME} Calls`,
+        description: `Scheduled incoming check-in calls from ${ASSISTANT_NAME}`,
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 600, 300, 600, 300, 600],
         lightColor: '#4cd7f6',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
         bypassDnd: true,
-        sound: 'default',
         enableVibrate: true,
       });
     }
@@ -225,14 +233,13 @@ export async function syncDailyCallSchedule(): Promise<void> {
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: 'AURA',
+          title: ASSISTANT_NAME,
           body: slot.label,
           categoryIdentifier: 'aura-call-actions',
           data: {
             type: 'scheduled_call',
             slot: slot.id,
           },
-          sound: 'default',
           sticky: true,
           autoDismiss: false,
           color: '#4cd7f6',
@@ -241,7 +248,7 @@ export async function syncDailyCallSchedule(): Promise<void> {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           hour: slot.hour,
           minute: slot.minute,
-          channelId: 'aura-calls',
+          channelId: 'aura-calls-v2',
         },
       });
       console.log(`[CallScheduler] Scheduled daily ${slot.id} call at ${slot.hour}:${slot.minute}`);
@@ -279,7 +286,7 @@ export async function testCallIn(seconds: number = 10): Promise<string> {
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'AURA',
+      title: ASSISTANT_NAME,
       body: slot === 'morning' ? 'Morning check-in' : 'Evening check-in',
       categoryIdentifier: 'aura-call-actions',
       data: {
@@ -287,7 +294,6 @@ export async function testCallIn(seconds: number = 10): Promise<string> {
         slot,
         historyId,
       },
-      sound: 'default',
       sticky: true,
       autoDismiss: false,
       color: '#4cd7f6',
@@ -295,7 +301,7 @@ export async function testCallIn(seconds: number = 10): Promise<string> {
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
       seconds: Math.max(1, seconds),
-      channelId: 'aura-calls',
+      channelId: 'aura-calls-v2',
     },
   });
 

@@ -1,8 +1,9 @@
-import { startListening, stopListening, abortListening } from './asr';
+import { startListening, stopListening, abortListening, setAsrLocale } from './asr';
 import { streamLlmResponse, ChatTurn, initLlmContext } from './llm';
 import { speakSentence, stopTts, setTtsOnDone } from './tts';
 import { CallSlotId } from '../../config/callSchedule';
 import { appendTurnToCallEntry, updateCallEntry } from '../callHistory';
+import { ASSISTANT_NAME } from '../../config/appConfig';
 
 export type CallAgentState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -53,11 +54,11 @@ const EVENING_OPENERS = [
   'Hello Dark da! Day romba busy ah irundhucha? Epdi feel panreenga?',
 ];
 
-const MORNING_GOAL = `You are having a morning check-in call with Dark.
+const MORNING_GOAL = `You are ${ASSISTANT_NAME}, having a morning check-in call with Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
 Goal: Inquire how he slept, how he feels today, whether he had breakfast, and his plans for today.
 Ask only ONE simple question at a time in casual Tanglish. Keep answers short (1-2 sentences). Do not give medical diagnoses.`;
 
-const EVENING_GOAL = `You are having an evening check-in call with Dark.
+const EVENING_GOAL = `You are ${ASSISTANT_NAME}, having an evening check-in call with Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
 Goal: Inquire what he ate today, his physical activity, his stress or mood level, and his plans for tomorrow.
 Ask only ONE simple question at a time in casual Tanglish. Keep answers short (1-2 sentences). Do not give medical diagnoses.`;
 
@@ -78,6 +79,9 @@ class CallAgentService {
 
   private asrRetryCount = 0;
   private asrRetryTimer: any = null;
+  private openerFallbackTimer: any = null;
+  private isStartingListening = false;
+  private isProcessingUtterance = false;
 
   private debugMetrics: CallDebugMetrics = {
     timeToFirstTokenMs: null,
@@ -109,6 +113,7 @@ class CallAgentService {
   }
 
   private setState(newState: CallAgentState): void {
+    console.log(`[CallAgent] State -> ${newState}`);
     this.state = newState;
     this.notify();
   }
@@ -120,6 +125,9 @@ class CallAgentService {
     if (this.isCallActive) return;
 
     this.isCallActive = true;
+    this.isMuted = false;
+    this.isStartingListening = false;
+    this.isProcessingUtterance = false;
     this.activeSlot = options?.slot;
     this.activeHistoryId = options?.historyId;
     this.auraTurnCount = 0;
@@ -131,6 +139,12 @@ class CallAgentService {
     this.firstSentenceSpokenRecorded = false;
     this.asrRetryCount = 0;
     clearTimeout(this.asrRetryTimer);
+    clearTimeout(this.openerFallbackTimer);
+    stopTts();
+
+    // PART 1: Every call (including scheduled calls) defaults to 'en-IN'
+    setAsrLocale('en-IN');
+    console.log(`[CallAgent] Starting call (slot: ${options?.slot || 'manual'}, historyId: ${options?.historyId || 'none'}, defaultLocale: en-IN)`);
 
     // Reset debug metrics
     this.debugMetrics = {
@@ -145,7 +159,7 @@ class CallAgentService {
       // Ensure model context is ready
       await initLlmContext();
 
-      // If scheduled call, AURA speaks first with instant Tanglish opener
+      // If scheduled call, assistant speaks first with instant Tanglish opener
       if (this.activeSlot) {
         await this.handleScheduledCallOpener();
       } else {
@@ -153,7 +167,7 @@ class CallAgentService {
         await this.startListeningCycle();
       }
     } catch (err: any) {
-      this.errorMessage = err?.message || 'Failed to start AURA call agent.';
+      this.errorMessage = err?.message || `Failed to start ${ASSISTANT_NAME} call agent.`;
       this.setState('error');
     }
   }
@@ -165,20 +179,44 @@ class CallAgentService {
     const openerList = this.activeSlot === 'morning' ? MORNING_OPENERS : EVENING_OPENERS;
     const chosenOpener = openerList[Math.floor(Math.random() * openerList.length)];
 
+    console.log(`[CallAgent] Scheduled call opener: "${chosenOpener}"`);
     this.auraTurnCount = 1;
     this.aiResponse = chosenOpener;
     this.recordTurn('assistant', chosenOpener);
     this.setState('speaking');
 
-    speakSentence(chosenOpener);
+    // Fallback timer for opener in case expo-speech drops onDone
+    const estimatedOpenerMs = Math.max(
+      2000,
+      Math.min(10000, Math.round((chosenOpener.length / 15) * 1000) + 1500)
+    );
 
-    setTtsOnDone(() => {
+    let openerFinished = false;
+    const startListeningAfterOpener = () => {
+      if (openerFinished) return;
+      openerFinished = true;
+      clearTimeout(this.openerFallbackTimer);
       if (this.isCallActive && !this.isMuted) {
+        console.log('[CallAgent] Opener TTS finished, starting listening cycle');
         this.startListeningCycle();
       } else {
         this.setState('idle');
       }
+    };
+
+    clearTimeout(this.openerFallbackTimer);
+    this.openerFallbackTimer = setTimeout(() => {
+      if (this.isCallActive && this.state === 'speaking') {
+        console.warn(`[CallAgent] Opener fallback timer expired (${estimatedOpenerMs}ms), forcing listening cycle`);
+        startListeningAfterOpener();
+      }
+    }, estimatedOpenerMs);
+
+    setTtsOnDone(() => {
+      startListeningAfterOpener();
     });
+
+    speakSentence(chosenOpener);
   }
 
   /**
@@ -202,12 +240,16 @@ class CallAgentService {
     if (!this.isCallActive) return;
 
     this.isCallActive = false;
+    this.isProcessingUtterance = false;
+    this.isStartingListening = false;
     clearTimeout(this.asrRetryTimer);
+    clearTimeout(this.openerFallbackTimer);
     stopTts();
     await abortListening();
 
     const endedAt = Date.now();
     const durationSec = Math.max(0, Math.round((endedAt - this.callStartTimestamp) / 1000));
+    console.log(`[CallAgent] Call ended, duration: ${durationSec}s`);
 
     if (this.activeHistoryId) {
       updateCallEntry(this.activeHistoryId, {
@@ -245,115 +287,137 @@ class CallAgentService {
    * Starts a new speech recognition listening cycle with resilient retry and silence handling.
    */
   private async startListeningCycle(): Promise<void> {
-    if (!this.isCallActive || this.isMuted) return;
+    if (!this.isCallActive) return;
+    if (this.isMuted) {
+      console.log('[CallAgent] Listening cycle skipped: microphone is muted');
+      return;
+    }
+    if (this.isStartingListening) return;
+    this.isStartingListening = true;
 
-    this.userTranscript = '';
-    this.setState('listening');
+    try {
+      this.userTranscript = '';
+      this.setState('listening');
+      console.log('[CallAgent] Listening cycle started');
 
-    await startListening({
-      onInterimResult: (transcript) => {
-        if (!this.isCallActive) return;
-        this.asrRetryCount = 0; // speech received, reset error count
-        this.userTranscript = transcript;
-        this.notify();
-      },
-      onFinalResult: async (finalTranscript) => {
-        if (!this.isCallActive) return;
-        this.asrRetryCount = 0; // valid turn completed
+      await startListening({
+        onInterimResult: (transcript) => {
+          if (!this.isCallActive) return;
+          this.asrRetryCount = 0; // speech received, reset error count
+          this.userTranscript = transcript;
+          this.notify();
+        },
+        onFinalResult: async (finalTranscript) => {
+          if (!this.isCallActive) return;
+          this.asrRetryCount = 0; // valid turn completed
 
-        const trimmed = finalTranscript.trim();
-        if (!trimmed) {
-          // Empty result, loop back to listen
-          if (this.state === 'listening') {
-            await this.startListeningCycle();
-          }
-          return;
-        }
-
-        this.userTranscript = trimmed;
-        await this.handleUserUtterance(trimmed);
-      },
-      onSilence: () => {
-        if (!this.isCallActive || this.isMuted) return;
-        // Normal silence (no-speech or speech-timeout): silently restart listening without error count
-        if (this.state === 'listening') {
-          this.startListeningCycle();
-        }
-      },
-      onError: (errorMsg, errorCode) => {
-        if (!this.isCallActive || this.isMuted) return;
-
-        // Exponential backoff retry for transient errors (up to 3 times: 500ms, 1s, 2s)
-        if (this.asrRetryCount < 3) {
-          const delays = [500, 1000, 2000];
-          const delay = delays[this.asrRetryCount] || 2000;
-          this.asrRetryCount++;
-
-          clearTimeout(this.asrRetryTimer);
-          this.asrRetryTimer = setTimeout(() => {
-            if (this.isCallActive && !this.isMuted && this.state === 'listening') {
-              this.startListeningCycle();
+          const trimmed = finalTranscript.trim();
+          if (!trimmed) {
+            // Empty result, loop back to listen
+            if (this.state === 'listening') {
+              await this.startListeningCycle();
             }
-          }, delay);
-        } else {
-          // Reached max 3 retries: stop and show user-friendly message
-          let friendly = 'Speech recognition stopped unexpectedly.';
-          if (errorCode === 'network') {
-            friendly = 'No internet connection for speech recognition. Connect to internet or download offline speech pack.';
-          } else if (errorCode === 'language-not-supported') {
-            friendly = 'Selected language is not supported or offline pack is missing.';
-          } else if (errorCode === 'not-allowed') {
-            friendly = 'Microphone or speech recognition permission was denied.';
-          } else if (errorCode === 'service-not-allowed') {
-            friendly = 'Speech recognition service is unavailable on this device.';
-          } else if (errorMsg) {
-            friendly = errorMsg;
+            return;
           }
 
-          this.errorMessage = friendly;
-          this.setState('error');
-        }
-      },
-    });
+          this.userTranscript = trimmed;
+          await this.handleUserUtterance(trimmed);
+        },
+        onSilence: () => {
+          if (!this.isCallActive || this.isMuted) return;
+          console.log('[CallAgent] ASR silence detected, silently restarting listening');
+          if (this.state === 'listening') {
+            this.startListeningCycle();
+          }
+        },
+        onEnd: () => {
+          if (!this.isCallActive || this.isMuted) return;
+          console.log('[CallAgent] ASR end with no transcript, silently restarting listening');
+          if (this.state === 'listening') {
+            this.startListeningCycle();
+          }
+        },
+        onError: (errorMsg, errorCode) => {
+          if (!this.isCallActive || this.isMuted) return;
+
+          // Exponential backoff retry for transient errors (up to 3 times: 500ms, 1s, 2s)
+          if (this.asrRetryCount < 3) {
+            const delays = [500, 1000, 2000];
+            const delay = delays[this.asrRetryCount] || 2000;
+            this.asrRetryCount++;
+            console.log(`[CallAgent] ASR transient error (${errorCode}), retrying in ${delay}ms (attempt ${this.asrRetryCount}/3)`);
+
+            clearTimeout(this.asrRetryTimer);
+            this.asrRetryTimer = setTimeout(() => {
+              if (this.isCallActive && !this.isMuted && this.state === 'listening') {
+                this.startListeningCycle();
+              }
+            }, delay);
+          } else {
+            // Reached max 3 retries: stop and show user-friendly message
+            let friendly = 'Speech recognition stopped unexpectedly.';
+            if (errorCode === 'network') {
+              friendly = 'No internet connection for speech recognition. Connect to internet or download offline speech pack.';
+            } else if (errorCode === 'language-not-supported') {
+              friendly = 'Selected language is not supported or offline pack is missing.';
+            } else if (errorCode === 'not-allowed') {
+              friendly = 'Microphone or speech recognition permission was denied.';
+            } else if (errorCode === 'service-not-allowed') {
+              friendly = 'Speech recognition service is unavailable on this device.';
+            } else if (errorMsg) {
+              friendly = errorMsg;
+            }
+
+            this.errorMessage = friendly;
+            this.setState('error');
+          }
+        },
+      });
+    } finally {
+      this.isStartingListening = false;
+    }
   }
 
   /**
    * Handles user speech completion and drives LLM + TTS pipeline.
    */
   private async handleUserUtterance(userInput: string): Promise<void> {
-    // 1. Immediately STOP listening while AI speaks
-    await stopListening();
-    this.endOfUserSpeechTimestamp = Date.now();
-    this.firstSentenceSpokenRecorded = false;
-
-    this.setState('thinking');
-
-    // 2. Play an immediate conversational filler to mask LLM latency
-    const filler = CASUAL_FILLERS[Math.floor(Math.random() * CASUAL_FILLERS.length)];
-    speakSentence(filler);
-
-    // 3. Record user turn
-    this.recordTurn('user', userInput);
-
-    // Check if max turns reached (AURA turns)
-    if (this.auraTurnCount >= MAX_TURNS) {
-      await this.handleCallWrapUp();
-      return;
-    }
-
-    // 4. Stream LLM generation
-    let sentenceBuffer = '';
-    this.aiResponse = '';
-
-    // Determine custom system prompt based on scheduled slot goal
-    let customSystemPrompt: string | undefined;
-    if (this.activeSlot === 'morning') {
-      customSystemPrompt = MORNING_GOAL;
-    } else if (this.activeSlot === 'evening') {
-      customSystemPrompt = EVENING_GOAL;
-    }
+    if (this.isProcessingUtterance) return;
+    this.isProcessingUtterance = true;
 
     try {
+      // 1. Immediately STOP listening while AI speaks
+      await stopListening();
+      this.endOfUserSpeechTimestamp = Date.now();
+      this.firstSentenceSpokenRecorded = false;
+
+      this.setState('thinking');
+
+      // 2. Play an immediate conversational filler to mask LLM latency
+      const filler = CASUAL_FILLERS[Math.floor(Math.random() * CASUAL_FILLERS.length)];
+      speakSentence(filler);
+
+      // 3. Record user turn
+      this.recordTurn('user', userInput);
+
+      // Check if max turns reached (AURA turns)
+      if (this.auraTurnCount >= MAX_TURNS) {
+        await this.handleCallWrapUp();
+        return;
+      }
+
+      // 4. Stream LLM generation
+      let sentenceBuffer = '';
+      this.aiResponse = '';
+
+      // Determine custom system prompt based on scheduled slot goal
+      let customSystemPrompt: string | undefined;
+      if (this.activeSlot === 'morning') {
+        customSystemPrompt = MORNING_GOAL;
+      } else if (this.activeSlot === 'evening') {
+        customSystemPrompt = EVENING_GOAL;
+      }
+
       const { text, metrics } = await streamLlmResponse(
         this.conversationHistory,
         (token) => {
@@ -428,7 +492,24 @@ class CallAgentService {
       console.error('[CallAgent] Generation error:', err);
       this.errorMessage = err?.message || 'Error generating AI response.';
       this.setState('error');
+    } finally {
+      this.isProcessingUtterance = false;
     }
+  }
+
+  /**
+   * DEV-only testing method: routes typed text through the exact same
+   * pipeline as a spoken user turn (LLM -> TTS -> next turn).
+   */
+  public async sendDevUtterance(userInput: string): Promise<void> {
+    if (!this.isCallActive) return;
+    const trimmed = userInput.trim();
+    if (!trimmed) return;
+
+    console.log(`[CallAgent] DEV manual utterance submitted: "${trimmed}"`);
+    this.userTranscript = trimmed;
+    this.notify();
+    await this.handleUserUtterance(trimmed);
   }
 
   /**

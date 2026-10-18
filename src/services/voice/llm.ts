@@ -134,6 +134,9 @@ export async function streamLlmResponse(
     let tokenCount = 0;
     let fullGeneratedText = '';
 
+    const userPrompt = messages[messages.length - 1]?.content || '';
+    console.log(`[LLM] called with: "${userPrompt}"`);
+
     const result = await context.completion(
       {
         messages,
@@ -148,6 +151,7 @@ export async function streamLlmResponse(
         if (firstTokenTime === null) {
           firstTokenTime = Date.now();
           const ttftMs = firstTokenTime - startTime;
+          console.log(`[LLM] first token: ${ttftMs}ms`);
           options?.onFirstToken?.(ttftMs);
         }
         tokenCount += 1;

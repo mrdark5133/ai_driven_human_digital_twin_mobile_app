@@ -13,6 +13,7 @@ import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, radius, space, type } from '../theme/tokens';
 import { CALL_SLOTS } from '../src/config/callSchedule';
+import { ASSISTANT_NAME } from '../src/config/appConfig';
 import {
   CallHistoryEntry,
   getCallHistory,
@@ -297,7 +298,7 @@ export default function CallHistoryScreen() {
               <MaterialIcons name="history" size={40} color={colors.outline} />
               <Text style={styles.emptyCardTitle}>No Calls Recorded</Text>
               <Text style={styles.emptyCardDesc}>
-                Scheduled check-ins and direct voice calls with AURA will appear here.
+                Scheduled check-ins and direct voice calls with {ASSISTANT_NAME} will appear here.
               </Text>
             </View>
           ) : (

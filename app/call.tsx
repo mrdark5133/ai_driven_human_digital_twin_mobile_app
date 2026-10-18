@@ -7,6 +7,7 @@ import {
   Animated,
   Easing,
   Platform,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -22,6 +23,7 @@ import {
   triggerOfflineModelDownload,
 } from '../src/services/voice/asr';
 import { CallSlotId } from '../src/config/callSchedule';
+import { ASSISTANT_NAME } from '../src/config/appConfig';
 
 export default function CallScreen() {
   const router = useRouter();
@@ -55,7 +57,8 @@ export default function CallScreen() {
     turnCount: 0,
   });
 
-  const [currentLocale, setCurrentLocale] = useState<AsrLocale>(getAsrLocale());
+  const [currentLocale, setCurrentLocale] = useState<AsrLocale>('en-IN');
+  const [devInputText, setDevInputText] = useState('');
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -74,6 +77,11 @@ export default function CallScreen() {
   // 2. Initial check for model file & start call
   useEffect(() => {
     let mounted = true;
+
+    // PART 1: Reset locale to en-IN for every call (including scheduled calls)
+    setAsrLocale('en-IN');
+    setCurrentLocale('en-IN');
+
     (async () => {
       const ready = await isModelDownloaded();
       if (mounted) {
@@ -207,6 +215,13 @@ export default function CallScreen() {
     setCurrentLocale(nextLocale);
   };
 
+  const handleSendDevText = async () => {
+    if (!devInputText.trim()) return;
+    const text = devInputText.trim();
+    setDevInputText('');
+    await callAgent.sendDevUtterance(text);
+  };
+
   const formatMb = (bytes: number) => {
     return (bytes / (1024 * 1024)).toFixed(1);
   };
@@ -246,7 +261,7 @@ export default function CallScreen() {
       const slotName = params.slot === 'morning' ? 'Morning Check-in' : 'Evening Check-in';
       return `Scheduled • ${slotName} • Turn ${agentEvent.turnCount}/${MAX_TURNS}`;
     }
-    return `On-Device Phone Call • Tanglish (${currentLocale})`;
+    return `On-Device Phone Call • ${currentLocale === 'en-IN' ? 'Tanglish (en-IN)' : 'Tamil script output (ta-IN)'}`;
   };
 
   return (
@@ -257,7 +272,7 @@ export default function CallScreen() {
           <MaterialIcons name="chevron-left" size={28} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerTitleCol}>
-          <Text style={styles.headerTitle}>AURA</Text>
+          <Text style={styles.headerTitle}>{ASSISTANT_NAME}</Text>
           <Text style={styles.headerSubtitle}>{getSubtitle()}</Text>
         </View>
         <TouchableOpacity
@@ -266,7 +281,7 @@ export default function CallScreen() {
           activeOpacity={0.8}
         >
           <Text style={styles.localeChipText}>
-            {currentLocale === 'en-IN' ? 'en-IN (Tanglish)' : 'ta-IN (Tamil)'}
+            {currentLocale === 'en-IN' ? 'en-IN (Tanglish)' : 'Tamil script output'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -277,9 +292,9 @@ export default function CallScreen() {
           <View style={styles.downloadIconRing}>
             <MaterialIcons name="cloud-download" size={44} color={colors.primary} />
           </View>
-          <Text style={styles.downloadTitle}>Setup AURA Voice Intelligence</Text>
+          <Text style={styles.downloadTitle}>Setup {ASSISTANT_NAME} Voice Intelligence</Text>
           <Text style={styles.downloadDescription}>
-            To run 100% on-device with zero server delay or subscription, AURA requires the
+            To run 100% on-device with zero server delay or subscription, {ASSISTANT_NAME} requires the
             Qwen2.5-1.5B model (~1.1 GB). This is downloaded once to your phone.
           </Text>
 
@@ -386,7 +401,7 @@ export default function CallScreen() {
             </View>
           </View>
 
-          {/* Central Pulsing AURA Orb */}
+          {/* Central Pulsing Assistant Orb */}
           <View style={styles.orbArea}>
             <Animated.View
               style={[
@@ -435,6 +450,27 @@ export default function CallScreen() {
             </View>
           </View>
 
+          {/* PART 3: Live "You said: <text>" line updating with interim results */}
+          <View style={styles.liveTranscriptBar}>
+            <View style={styles.liveTranscriptHeader}>
+              <MaterialIcons
+                name={agentEvent.state === 'listening' ? 'mic' : 'hearing'}
+                size={14}
+                color={colors.teal}
+              />
+              <Text style={styles.liveTranscriptTitle}>YOU SAID (LIVE)</Text>
+            </View>
+            <Text style={styles.liveTranscriptValue} numberOfLines={2}>
+              {agentEvent.userTranscript ? (
+                agentEvent.userTranscript
+              ) : agentEvent.state === 'listening' ? (
+                <Text style={styles.liveTranscriptHint}>Listening... speak now</Text>
+              ) : (
+                <Text style={styles.liveTranscriptHint}>--</Text>
+              )}
+            </Text>
+          </View>
+
           {/* Real-time Subtitles Area */}
           <View style={styles.subtitlesSection}>
             {agentEvent.userTranscript ? (
@@ -446,7 +482,7 @@ export default function CallScreen() {
 
             {agentEvent.aiResponse ? (
               <View style={styles.aiBubble}>
-                <Text style={styles.aiSpeakerLabel}>AURA</Text>
+                <Text style={styles.aiSpeakerLabel}>{ASSISTANT_NAME}</Text>
                 <Text style={styles.aiSpeechText}>{agentEvent.aiResponse}</Text>
               </View>
             ) : null}
@@ -457,6 +493,40 @@ export default function CallScreen() {
               </View>
             ) : null}
           </View>
+
+          {/* PART 3: DEV manual speech turn input (__DEV__ only) */}
+          {__DEV__ && (
+            <View style={styles.devBarContainer}>
+              <TextInput
+                style={styles.devTextInput}
+                placeholder="DEV test: type speech turn..."
+                placeholderTextColor={colors.outline}
+                value={devInputText}
+                onChangeText={setDevInputText}
+                editable={agentEvent.state === 'listening' || agentEvent.state === 'idle'}
+                onSubmitEditing={handleSendDevText}
+                returnKeyType="send"
+              />
+              <TouchableOpacity
+                style={[
+                  styles.devSendButton,
+                  (!devInputText.trim() ||
+                    agentEvent.state === 'thinking' ||
+                    agentEvent.state === 'speaking') &&
+                    styles.devSendButtonDisabled,
+                ]}
+                onPress={handleSendDevText}
+                disabled={
+                  !devInputText.trim() ||
+                  agentEvent.state === 'thinking' ||
+                  agentEvent.state === 'speaking'
+                }
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="send" size={18} color="#070e1c" />
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Call Controls Footer */}
           <View style={styles.controlsRow}>
@@ -495,13 +565,26 @@ export default function CallScreen() {
 
             {/* Language Switch Button */}
             <TouchableOpacity
-              style={styles.controlButton}
+              style={[
+                styles.controlButton,
+                currentLocale === 'ta-IN' && styles.controlButtonActive,
+              ]}
               onPress={handleToggleLocale}
               activeOpacity={0.8}
             >
-              <MaterialIcons name="translate" size={26} color={colors.text} />
-              <Text style={styles.controlLabel}>
-                {currentLocale === 'en-IN' ? 'en-IN' : 'ta-IN'}
+              <MaterialIcons
+                name="translate"
+                size={26}
+                color={currentLocale === 'ta-IN' ? '#070e1c' : colors.text}
+              />
+              <Text
+                style={[
+                  styles.controlLabel,
+                  currentLocale === 'ta-IN' && { color: '#070e1c' },
+                ]}
+                numberOfLines={1}
+              >
+                {currentLocale === 'en-IN' ? 'en-IN' : 'Tamil script output'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -872,5 +955,69 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 8,
+  },
+
+  /* PART 3: Live Transcript Card */
+  liveTranscriptBar: {
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.teal,
+    marginVertical: space.xs,
+  },
+  liveTranscriptHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  liveTranscriptTitle: {
+    fontSize: 10,
+    color: colors.teal,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  liveTranscriptValue: {
+    ...type.body,
+    color: colors.text,
+    fontSize: 13,
+  },
+  liveTranscriptHint: {
+    color: colors.textDim,
+    fontStyle: 'italic',
+  },
+
+  /* PART 3: DEV Manual Input Row */
+  devBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    backgroundColor: colors.cardLow,
+    borderRadius: radius.full,
+    paddingHorizontal: space.sm,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: colors.outline + '44',
+    marginBottom: space.xs,
+  },
+  devTextInput: {
+    flex: 1,
+    ...type.bodySm,
+    color: colors.text,
+    paddingVertical: 6,
+    paddingHorizontal: space.xs,
+  },
+  devSendButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devSendButtonDisabled: {
+    opacity: 0.35,
   },
 });

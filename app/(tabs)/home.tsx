@@ -13,6 +13,7 @@ import {
   StepsDataPoint,
   HeartRateDataPoint,
 } from '../../src/services/healthConnect';
+import { ASSISTANT_NAME } from '../../src/config/appConfig';
 
 function Tag({ text, color }: { text: string; color: string }) {
   return (
@@ -298,7 +299,7 @@ export default function Home() {
                 tagColor={colors.amberText}
               />
               <Text style={[s.value, { fontSize: 16, lineHeight: 22, marginTop: 6 }]}>
-                Waiting for Aura's call
+                Waiting for {ASSISTANT_NAME}'s call
               </Text>
             </View>
             <Text style={s.labelSm}>Sleep will come from the calling agent</Text>

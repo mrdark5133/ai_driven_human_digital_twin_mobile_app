@@ -20,6 +20,7 @@ import { DataService } from '../../services/dataService';
 import { ChatMessage } from '../../types';
 import { streamLlmResponse, ChatTurn } from '../../src/services/voice/llm';
 import { isModelDownloaded, downloadModel } from '../../src/services/voice/modelManager';
+import { ASSISTANT_NAME } from '../../src/config/appConfig';
 
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(DataService.getChatHistory());
@@ -78,7 +79,7 @@ export default function AssistantScreen() {
       `- Stress Index: ${vitals.stressIndex}/100 (${vitals.stressStatus || 'Normal'})`,
     ].join('\n');
 
-    return `You are AURA, an empathetic, caring personal digital twin and health companion for Dark.
+    return `You are ${ASSISTANT_NAME}, an empathetic, caring personal digital twin and health companion for Dark. Never call yourself AURA; your name is ${ASSISTANT_NAME}.
 ${vitalsCard}
 CRITICAL RULES:
 1. Use ONLY the exact vital numbers listed in the card above. NEVER invent or hallucinate data or numbers.
@@ -161,7 +162,7 @@ CRITICAL RULES:
       const fallback =
         accumulatedText.trim().length > 0
           ? accumulatedText
-          : 'AURA had a hiccup generating a response. Please tap to try again.';
+          : `${ASSISTANT_NAME} had a hiccup generating a response. Please tap to try again.`;
       DataService.updateChatMessage(auraMsgId, fallback);
       setMessages(DataService.getChatHistory());
     } finally {
@@ -197,7 +198,7 @@ CRITICAL RULES:
                   <View style={styles.pulseDot} />
                 </View>
                 <View>
-                  <Text style={styles.agentTitle}>AURA</Text>
+                  <Text style={styles.agentTitle}>{ASSISTANT_NAME}</Text>
                   <Text style={styles.agentSub}>Health Assistant</Text>
                 </View>
               </View>
@@ -209,7 +210,7 @@ CRITICAL RULES:
                   activeOpacity={0.8}
                 >
                   <MaterialIcons name="call" size={13} color="#070e1c" />
-                  <Text style={styles.callAuraBtnText}>Call AURA</Text>
+                  <Text style={styles.callAuraBtnText}>Call {ASSISTANT_NAME}</Text>
                 </TouchableOpacity>
 
                 {/* History Button (Part C6) */}
@@ -238,7 +239,7 @@ CRITICAL RULES:
                 <Text style={styles.modelDownloadTitle}>On-Device AI Setup Required</Text>
               </View>
               <Text style={styles.modelDownloadDesc}>
-                AURA text and voice run completely on your device using Qwen2.5-1.5B (~1.1 GB).
+                {ASSISTANT_NAME} text and voice run completely on your device using Qwen2.5-1.5B (~1.1 GB).
                 Download once to chat without server latency or data leakage.
               </Text>
 
@@ -421,7 +422,7 @@ CRITICAL RULES:
                         { color: isUser ? colors.primary : colors.secondary },
                       ]}
                     >
-                      {isUser ? 'You' : 'AURA'}
+                      {isUser ? 'You' : ASSISTANT_NAME}
                     </Text>
                     <Text style={styles.msgTime}>{msg.timeStr}</Text>
                   </View>
@@ -436,7 +437,7 @@ CRITICAL RULES:
                       /* Typing Indicator */
                       <View style={styles.typingIndicatorRow}>
                         <ActivityIndicator size="small" color={colors.secondary} />
-                        <Text style={styles.typingText}>AURA is thinking...</Text>
+                        <Text style={styles.typingText}>{ASSISTANT_NAME} is thinking...</Text>
                       </View>
                     ) : (
                       <Text style={styles.msgBodyText}>
@@ -484,7 +485,7 @@ CRITICAL RULES:
               style={styles.textInput}
               value={inputText}
               onChangeText={setInputText}
-              placeholder="Ask Aura about heart rate, sleep or stress..."
+              placeholder={`Ask ${ASSISTANT_NAME} about heart rate, sleep or stress...`}
               placeholderTextColor={colors.outline}
               onSubmitEditing={() => handleSendMessage()}
               returnKeyType="send"
@@ -504,7 +505,7 @@ CRITICAL RULES:
               )}
             </TouchableOpacity>
           </View>
-          <Text style={styles.bottomDisclaimer}>Aura gives general tips, not medical advice.</Text>
+          <Text style={styles.bottomDisclaimer}>{ASSISTANT_NAME} gives general tips, not medical advice.</Text>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
