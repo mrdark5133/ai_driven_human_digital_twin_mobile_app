@@ -5,13 +5,14 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Android Health Connect](https://img.shields.io/badge/Health%20Connect-Android%20API-34A853?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/health-and-fitness/guides/health-connect)
 [![On-Device LLM](https://img.shields.io/badge/On--Device%20LLM-llama.rn%20(Qwen2.5)-FF6F00?style=for-the-badge&logo=ai&logoColor=white)](https://github.com/mybigday/llama.rn)
-[![On-Device ML](https://img.shields.io/badge/On--Device%20ML-Pure%20TS%20Predictor-blueviolet?style=for-the-badge&logo=scikitlearn&logoColor=white)](#-7-on-device-sleep--lifestyle-risk-indicator)
+[![On-Device ML](https://img.shields.io/badge/On--Device%20ML-Pure%20TS%20Predictor-blueviolet?style=for-the-badge&logo=scikitlearn&logoColor=white)](#-1-on-device-sleep--lifestyle-risk-indicator)
+[![On-Device Rule Engine](https://img.shields.io/badge/On--Device%20Rules-Risk%20Predict%20Engine-teal?style=for-the-badge&logo=shield&logoColor=white)](#-2-on-device-rule-based-risk-predict-engine)
 [![Zero-Knowledge Privacy](https://img.shields.io/badge/Privacy-100%25%20On--Device-success?style=for-the-badge&logo=shield&logoColor=white)](#-zero-knowledge-privacy--clinical-compliance)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 A clinical-grade **Human Digital Twin** mobile health application built with **React Native**, **Expo SDK 57 (Continuous Native Generation)**, **TypeScript**, and **llama.rn**.
 
-AI-Driven Human ingests continuous multi-sensor biometric telemetry—from native **Android Health Connect** smartwatch streams to manual inputs—and synthesizes it into a living, real-time computational avatar of systemic homeostasis. The platform features **Pallavi**, an entirely **on-device, full-duplex conversational voice and chat companion** powered by local quantized LLM inference (`Qwen2.5-1.5B`), scheduled automated in-app clinical check-in calls, sovereign offline data processing, and a **zero-dependency on-device Sleep & Lifestyle Risk ML model** evaluated in pure TypeScript.
+AI-Driven Human ingests continuous multi-sensor biometric telemetry—from native **Android Health Connect** smartwatch streams to manual inputs—and synthesizes it into a living, real-time computational avatar of systemic homeostasis. The platform features **Pallavi**, an entirely **on-device, full-duplex conversational voice and chat companion** powered by local quantized LLM inference (`Qwen2.5-1.5B`), scheduled automated in-app clinical check-in calls, sovereign offline data processing, an on-device **Sleep & Lifestyle Risk ML model**, and a dedicated **real-time rule-based Risk Predict Engine** evaluated in pure TypeScript.
 
 ---
 
@@ -35,7 +36,36 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 🎙️ 2. Pallavi: On-Device Voice Calling Companion (`app/call.tsx`)
+### ⚡ 2. On-Device Rule-Based Risk Predict Engine (`src/services/riskEngine.ts`, `app/risk-details.tsx`)
+* **100% Offline & Deterministic Triage**: Pure TypeScript rules engine requiring zero dependencies, zero network requests, and zero cloud services.
+* **4 Core Clinical & Lifestyle Domains**:
+  * **Cardiovascular**: Evaluated from phone step counts, smoking exposure, BMI, and sleep recovery debt.
+  * **Metabolic**: Evaluated from BMI, late-night meal timing ratio, and daily physical steps.
+  * **Respiratory**: Evaluated from smoking rate, daily aerobic exercise conditioning, and step activity.
+  * **Lifestyle**: Evaluated from restorative sleep duration and baseline step activity.
+* **Strict Real-Data Pipeline (`src/services/riskDataService.ts`)**:
+  * **Steps**: Extracted from Android Health Connect with rolling average over available days.
+  * **Heart Rate**: Sourced directly from Health Connect smartwatch telemetry (heart rate alone never triggers artificial risk).
+  * **BMI**: Calculated dynamically from Profile height and weight (`heightCm` & `weightKg`).
+  * **Smoking Habit**: Managed via a dedicated toggle and cigarettes/day stepper in user Profile (`app/(tabs)/profile.tsx`).
+  * **Sleep & Meals**: Extracted through NLP regex parsing of Pallavi's saved call transcripts in `AsyncStorage`.
+  * **Never Uses Synthetic Defaults**: If data is missing, the engine explicitly marks parameters as missing rather than fabricating baseline scores.
+* **Smart Data Completeness & Confidence Triage**:
+  * **Confidence Rating (`"full"` vs `"partial"`)**: Flags whether all required inputs were present.
+  * **Safe Low Ratings**: Low risk with partial data is visually badged with a grey outline pill and `"Low (limited data)"` rather than false reassurance.
+  * **Limited Data Badges**: Moderate and Elevated risks with incomplete data retain their triage colors but display `"Based on limited data"` subtitles.
+  * **Unknown Status**: Categories lacking real telemetry never display a fabricated score number or bar—only `"Need data"`.
+* **Home Screen Quick Card (`app/(tabs)/home.tsx`)**:
+  * Compact card below "Today's tip" displaying a 4-chip triage summary (`Cardio`, `Metabolic`, `Resp`, `Lifestyle`) with live colored dots and levels.
+  * `"Rule-based"` tag badge and direct navigation to the full breakdown screen.
+  * Dynamic top status pill displaying the highest active risk level, or cleanly hidden when awaiting initial telemetry.
+* **Dedicated Risk Details Screen (`app/risk-details.tsx`)**:
+  * Category cards with level pills, colored scale progress bars, educational rationales, identified risk drivers, and missing data lines guiding what to log next.
+  * Clinical disclaimer: *"Educational estimate only. Not a medical diagnosis."*
+
+---
+
+### 🎙️ 3. Pallavi: On-Device Voice Calling Companion (`app/call.tsx`)
 * **100% Local Inference**: Powered by `llama.rn` running quantized GGUF models (`Qwen2.5-1.5B`) directly on the device NPU/CPU without cloud latency or third-party servers.
 * **Intelligent ASR Fallback Chain**: Native speech recognition with explicit Google Recognition Service targeting (`com.google.android.googlequicksearchbox`) and automatic locale fallback chain (`en-IN` Tanglish transliteration $\to$ `ta-IN` $\to$ `en-US`).
 * **Honest Recognition Badges**: Accurately indicates whether speech recognition is running offline on-device or utilizing network-assisted speech services.
@@ -46,7 +76,7 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 📞 3. Scheduled In-App Clinical Check-In Calls (`app/call-history.tsx`, `app/incoming-call.tsx`)
+### 📞 4. Scheduled In-App Clinical Check-In Calls (`app/call-history.tsx`, `app/incoming-call.tsx`)
 * **Scheduled Daily Check-Ins**: Rings inside the app daily at **08:45 AM** (*Morning check-in*) and **09:00 PM** (*Evening check-in*).
 * **WhatsApp / Telegram Style Incoming Screen**: Fullscreen incoming call overlay with pulsating caller rings, continuous haptic vibration, and a 45-second auto-miss countdown.
 * **Lockscreen Wake & Heads-Up Action**: Custom Android Config Plugin (`plugins/withAuraCallConfig.js`) configuring `showWhenLocked` and `turnScreenOn` over Android lock screen with **Answer** and **Decline** interactive actions.
@@ -59,7 +89,7 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 💬 4. On-Device LLM Assistant Chat (`app/(tabs)/assistant.tsx`)
+### 💬 5. On-Device LLM Assistant Chat (`app/(tabs)/assistant.tsx`)
 * **Real-Time Token Streaming**: Text chat streaming directly from the on-device LLM with live cursor and typing indicator.
 * **Shared Singleton Llama Context & Mutex Lock**: Thread-safe execution lock (`acquireLlmLock`) ensuring voice calls and text generations never collide or exceed device RAM.
 * **Biometric Context Card & Risk Integration**: Automatically injects dynamic 5-line user vitals (heart rate, sleep hours, steps, stress score, and the on-device **Sleep & Lifestyle Risk line**) into Pallavi's prompt with strict lifestyle guidance guardrails.
@@ -69,7 +99,7 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 🧬 5. Interactive 3D Holographic Twin (`app/(tabs)/twin.tsx`)
+### 🧬 6. Interactive 3D Holographic Twin (`app/(tabs)/twin.tsx`)
 * **Anatomical Visualization**: Vector-rendered translucent holographic body silhouette with dynamic organ system illumination.
 * **Organ-Level Telemetry Lock**: Real-time drill-down into **Cardiovascular**, **Neurological**, and **Pulmonary** systems.
 * **Continuous ECG Lead II Synthesizer**: Smooth 60 FPS waveform generator reflecting live heart rate and autonomic balance.
@@ -77,7 +107,7 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 💓 6. Dual-Stream Telemetry & Unified Homeostasis Engine (`app/(tabs)/home.tsx`)
+### 💓 7. Dual-Stream Telemetry & Unified Homeostasis Engine (`app/(tabs)/home.tsx`)
 * **Google Health Connect Integration**: Native Android health pipeline ingesting `HeartRateRecord` and `StepsRecord`.
 * **Manual Entry Fallback**: Zero-knowledge manual reading capture for heart rate, blood oxygen, and step count when no wearable is paired.
 * **Composite Bio-Index Score (0–100)**: Real-time multi-dimensional scoring of systemic stability, parasympathetic tone, and recovery readiness.
@@ -85,7 +115,7 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 
 ---
 
-### 📊 7. Predictive Analytics & Chrono-Anomalies (`app/(tabs)/insights.tsx`)
+### 📊 8. Predictive Analytics & Chrono-Anomalies (`app/(tabs)/insights.tsx`)
 * **Multi-Timeframe Trend Aggregation**: Switch between Day, Week, and Month aggregations.
 * **7-Day Resting Heart Rate Sparklines**: High-precision SVG curves detailing baseline drift and recovery trajectories.
 * **Diurnal Stress Distribution Matrix**: Visualizes time spent in Calm, Balanced, and Elevated autonomic stress bands.
@@ -114,6 +144,10 @@ AI-Driven Human ingests continuous multi-sensor biometric telemetry—from nativ
 |  - Hybrid ASR (en-IN/ta-IN)    - Qwen2.5-1.5B (GGUF)             - TTS Queue      |
 |  - Google Speech Service       - acquireLlmLock (Mutex)          - Interruption   |
 |  - Silence Filter & Backoff    - Vitals + Risk Context Inject    - Instant Opener |
+|                                                                                   |
+|  src/services/riskEngine.ts & riskDataService.ts (Rule-Based Triage Engine)       |
+|  - 4 Categories: Cardio, Metabolic, Respiratory, Lifestyle | Confidence: Full/Part|
+|  - Real Telemetry: Health Connect HR, Steps Avg, BMI, Smoke, Call Transcripts     |
 |                                                                                   |
 |  src/services/riskModelCore.ts & riskModel.ts (On-Device ML Predictor)            |
 |  - Pure TS Logistic Regression | StandardScaler & Sigmoid Inference               |
@@ -148,6 +182,7 @@ app/
 ├── call.tsx                        # Fullscreen Pallavi Voice Calling Agent & Diagnostic HUD
 ├── incoming-call.tsx               # WhatsApp-style Incoming Call Screen (Vibration & Actions)
 ├── call-history.tsx                # Call History Log, Daily Switches & 10s Test Call
+├── risk-details.tsx                # Detailed Category-Level Rule-Based Risk Breakdown Screen
 ├── (auth)/
 │   ├── _layout.tsx                 # Authentication Stack Navigator
 │   ├── login.tsx                   # Digital Twin Authentication & Initialization
@@ -214,6 +249,7 @@ ALL 10 TEST CASES PASSED! Max diff: 1.11e-16 (tolerance: 1.00e-6)
 | **Language** | TypeScript | `~6.0.3` | Strict type safety across contracts, hooks, and payloads |
 | **Navigation** | `expo-router` | `~57.0.26` | Universal typed routing with nested navigators and modals |
 | **On-Device LLM** | `llama.rn` | `^0.13.0-rc.7` | High-performance C++ GGUF inference for React Native |
+| **Rule-Based Triage** | Pure TypeScript (`riskEngine.ts`) | Strict TS | 4-category deterministic on-device risk engine with confidence triage |
 | **On-Device ML** | Pure TypeScript (`riskModelCore.ts`) | Strict TS | Instantaneous on-device logistic regression risk predictor |
 | **ML Training** | Python & `scikit-learn` | `1.5+` | Offline training on Sleep Health & Lifestyle cohort dataset |
 | **Speech Recognition** | `expo-speech-recognition` | `^57.1.1` | Hybrid on-device/online speech-to-text with Google service targeting |
@@ -258,6 +294,12 @@ Run the on-device risk model verification suite:
 
 ```bash
 npx --yes tsx scripts/verifyRiskModel.ts
+```
+
+Run the on-device rule-based risk engine test suite:
+
+```bash
+npx --yes tsx src/services/riskEngine.test.ts
 ```
 
 Verify dependency health and Expo environment:
