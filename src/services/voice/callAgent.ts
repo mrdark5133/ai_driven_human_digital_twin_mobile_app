@@ -9,6 +9,7 @@ import {
   resetAsrRetries,
   resetFallbackChain,
   getAsrDiagnostics,
+  isAsrAvailable,
   AsrLocale,
 } from './asr';
 import { streamLlmResponse, ChatTurn, initLlmContext } from './llm';
@@ -51,6 +52,7 @@ export interface CallAgentEvent {
   activeLocale: string;
   isAllLocal: boolean;
   isLanguagePackMissing: boolean;
+  isAsrAvailable: boolean;
 }
 
 export interface StartCallOptions {
@@ -160,6 +162,7 @@ class CallAgentService {
       activeLocale: asrDiag.locale,
       isAllLocal: asrDiag.isAllLocal,
       isLanguagePackMissing: this.isLanguagePackMissing,
+      isAsrAvailable: isAsrAvailable(),
     };
     this.listeners.forEach((fn) => fn(event));
   }
@@ -268,8 +271,8 @@ class CallAgentService {
       if (this.activeSlot) {
         await this.handleScheduledCallOpener();
       } else {
-        // Normal user-initiated call: if hands-free, begin listening; if tap-to-talk, wait in idle
-        if (this.tapToTalkMode) {
+        // Normal user-initiated call: if hands-free and ASR available, begin listening; otherwise wait in idle
+        if (!isAsrAvailable() || this.tapToTalkMode) {
           this.setState('idle');
         } else {
           this.scheduleListening('initial call start');
@@ -296,6 +299,12 @@ class CallAgentService {
 
     setTtsOnDone(() => {
       if (!this.isCallActive) return;
+
+      if (!isAsrAvailable()) {
+        console.log('[CallAgent] Opener finished, ASR unavailable -> idle');
+        this.setState('idle');
+        return;
+      }
 
       if (this.tapToTalkMode) {
         console.log('[CallAgent] Opener finished in Tap-to-Talk mode -> idle');
@@ -433,7 +442,7 @@ class CallAgentService {
    * Routes listening requests through single unified scheduler with cool-down delay.
    */
   private scheduleListening(reason: string, delayMs = 0): void {
-    if (!this.isCallActive || this.isMuted) return;
+    if (!this.isCallActive || this.isMuted || !isAsrAvailable()) return;
     if (this.state === 'speaking' || this.state === 'thinking') {
       console.log(`[CallAgent] scheduleListening deferred for "${reason}": assistant is active`);
       return;
@@ -712,6 +721,12 @@ class CallAgentService {
           return;
         }
 
+        if (!isAsrAvailable()) {
+          console.log('[CallAgent] Assistant finished speaking, ASR unavailable -> idle');
+          this.setState('idle');
+          return;
+        }
+
         if (this.tapToTalkMode) {
           console.log('[CallAgent] Assistant finished speaking in Tap-to-Talk mode -> idle');
           this.micActive = false;
@@ -734,6 +749,14 @@ class CallAgentService {
     } finally {
       this.isProcessingUtterance = false;
     }
+  }
+
+  public isAsrAvailable(): boolean {
+    return isAsrAvailable();
+  }
+
+  public async sendTextMessage(userInput: string): Promise<void> {
+    return this.sendDevUtterance(userInput);
   }
 
   /**

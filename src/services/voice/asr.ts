@@ -1,10 +1,40 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  ExpoSpeechRecognitionModule,
-  ExpoSpeechRecognitionResultEvent,
-  ExpoSpeechRecognitionErrorEvent,
-} from 'expo-speech-recognition';
+
+export interface ExpoSpeechRecognitionResultEvent {
+  results?: Array<{ transcript?: string }>;
+  isFinal?: boolean;
+}
+
+export interface ExpoSpeechRecognitionErrorEvent {
+  error?: string;
+  message?: string;
+}
+
+let speechModule: any = null;
+let speechModuleChecked = false;
+
+function getSpeechModule(): any {
+  if (!speechModuleChecked) {
+    speechModuleChecked = true;
+    try {
+      const mod = require('expo-speech-recognition');
+      speechModule = mod.ExpoSpeechRecognitionModule || mod.default?.ExpoSpeechRecognitionModule || mod.default || mod;
+    } catch (err) {
+      console.log('[ASR] expo-speech-recognition is not available on this build:', err);
+      speechModule = null;
+    }
+  }
+  return speechModule;
+}
+
+/**
+ * Checks whether native speech recognition is available on this device and build.
+ * Returns false safely in Expo Go or builds missing native modules.
+ */
+export function isAsrAvailable(): boolean {
+  return !!getSpeechModule();
+}
 
 export type AsrLocale = 'en-IN' | 'ta-IN';
 
@@ -151,9 +181,11 @@ export function getAsrDiagnostics(): {
  * Requests speech recognition and microphone permissions.
  */
 export async function requestAsrPermissions(): Promise<boolean> {
+  const mod = getSpeechModule();
+  if (!mod || !mod.requestPermissionsAsync) return false;
   try {
-    const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    return perm.granted;
+    const perm = await mod.requestPermissionsAsync();
+    return perm?.granted ?? false;
   } catch (err) {
     console.warn('[ASR] Permission request failed:', err);
     return false;
@@ -164,8 +196,10 @@ export async function requestAsrPermissions(): Promise<boolean> {
  * Checks whether on-device speech recognition is supported on this device.
  */
 export async function checkOnDeviceSupport(): Promise<boolean> {
+  const mod = getSpeechModule();
+  if (!mod || !mod.supportsOnDeviceRecognition) return false;
   try {
-    return ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
+    return mod.supportsOnDeviceRecognition();
   } catch {
     return false;
   }
@@ -176,15 +210,17 @@ export async function checkOnDeviceSupport(): Promise<boolean> {
  */
 export async function checkOfflineLocaleInstalled(locale: string): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
+  const mod = getSpeechModule();
+  if (!mod || !mod.supportsOnDeviceRecognition || !mod.getSupportedLocales) return false;
 
   try {
-    const supported = ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
+    const supported = mod.supportsOnDeviceRecognition();
     if (!supported) return false;
 
-    const res = await ExpoSpeechRecognitionModule.getSupportedLocales({});
+    const res = await mod.getSupportedLocales({});
     const target = locale.toLowerCase().replace('_', '-');
-    const installed = (res.installedLocales || []).map((l) => l.toLowerCase().replace('_', '-'));
-    return installed.some((l) => l === target || l.startsWith(target));
+    const installed = (res.installedLocales || []).map((l: string) => l.toLowerCase().replace('_', '-'));
+    return installed.some((l: string) => l === target || l.startsWith(target));
   } catch {
     return false;
   }
@@ -196,9 +232,11 @@ export async function checkOfflineLocaleInstalled(locale: string): Promise<boole
  */
 export function isGoogleQuickSearchInstalled(): boolean {
   if (Platform.OS !== 'android') return false;
+  const mod = getSpeechModule();
+  if (!mod || !mod.getSpeechRecognitionServices) return false;
 
   try {
-    const services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices() || [];
+    const services = mod.getSpeechRecognitionServices() || [];
     return services.includes(GOOGLE_SEARCH_PACKAGE);
   } catch {
     return false;
@@ -223,8 +261,18 @@ export function checkDefaultRecognizer(): {
     };
   }
 
+  const mod = getSpeechModule();
+  if (!mod || !mod.getDefaultRecognitionService) {
+    return {
+      isGoogle: false,
+      packageName: '',
+      selectedPackage: undefined,
+      hasGoogleQuickSearch: false,
+    };
+  }
+
   try {
-    const service = ExpoSpeechRecognitionModule.getDefaultRecognitionService();
+    const service = mod.getDefaultRecognitionService();
     const defaultPackage = service?.packageName || '';
     const hasGoogleQuickSearch = isGoogleQuickSearchInstalled();
 
@@ -239,7 +287,7 @@ export function checkDefaultRecognizer(): {
     };
   } catch (err) {
     console.warn('[ASR] Recognizer check error:', err);
-    return { isGoogle: true, packageName: '', selectedPackage: undefined, hasGoogleQuickSearch: false };
+    return { isGoogle: false, packageName: '', selectedPackage: undefined, hasGoogleQuickSearch: false };
   }
 }
 
@@ -257,9 +305,24 @@ export async function triggerOfflineModelDownload(locale: string): Promise<{
     };
   }
 
-  return await ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({
-    locale,
-  });
+  const mod = getSpeechModule();
+  if (!mod || !mod.androidTriggerOfflineModelDownload) {
+    return {
+      status: 'download_success',
+      message: 'Offline speech recognition not available on this build.',
+    };
+  }
+
+  try {
+    return await mod.androidTriggerOfflineModelDownload({
+      locale,
+    });
+  } catch (err: any) {
+    return {
+      status: 'download_success',
+      message: err?.message || 'Offline speech download unavailable.',
+    };
+  }
 }
 
 /**
@@ -391,6 +454,22 @@ async function executeListeningSession(
   isStartingListeningFlight = true;
 
   try {
+    if (!isAsrAvailable()) {
+      console.log('[ASR] ASR module is not available on this build.');
+      sessionState = 'idle';
+      callbacks.onError?.(
+        'Voice input needs the installed app build. You can type your reply instead.',
+        'asr-unavailable'
+      );
+      return;
+    }
+
+    const mod = getSpeechModule();
+    if (!mod) {
+      sessionState = 'idle';
+      return;
+    }
+
     // 1. Wait for any active or stopping session to completely end
     await ensurePreviousSessionFullyEnded();
 
@@ -487,7 +566,7 @@ async function executeListeningSession(
     };
 
     // 5. Register event listeners tagged with session ID
-    const subResult = ExpoSpeechRecognitionModule.addListener(
+    const subResult = mod.addListener(
       'result',
       (event: ExpoSpeechRecognitionResultEvent) => {
         if (sid !== currentSessionId) {
@@ -526,7 +605,7 @@ async function executeListeningSession(
       }
     );
 
-    const subVolume = ExpoSpeechRecognitionModule.addListener('volumechange', (event) => {
+    const subVolume = mod.addListener('volumechange', (event: any) => {
       if (sid !== currentSessionId) return;
       const val = typeof event?.value === 'number' ? event.value : -2;
       if (val > cycleMaxVolume) {
@@ -535,19 +614,19 @@ async function executeListeningSession(
       callbacks.onVolumeChange?.(val, cycleMaxVolume);
     });
 
-    const subSpeechStart = ExpoSpeechRecognitionModule.addListener('speechstart', () => {
+    const subSpeechStart = mod.addListener('speechstart', () => {
       if (sid !== currentSessionId) return;
       console.log(`[ASR #${sid}] speechstart`);
       callbacks.onSpeechStart?.();
     });
 
-    const subSpeechEnd = ExpoSpeechRecognitionModule.addListener('speechend', () => {
+    const subSpeechEnd = mod.addListener('speechend', () => {
       if (sid !== currentSessionId) return;
       console.log(`[ASR #${sid}] speechend`);
       callbacks.onSpeechEnd?.();
     });
 
-    const subError = ExpoSpeechRecognitionModule.addListener(
+    const subError = mod.addListener(
       'error',
       (event: ExpoSpeechRecognitionErrorEvent) => {
         if (sid !== currentSessionId) {
@@ -635,7 +714,7 @@ async function executeListeningSession(
       }
     );
 
-    const subEnd = ExpoSpeechRecognitionModule.addListener('end', () => {
+    const subEnd = mod.addListener('end', () => {
       if (sid !== currentSessionId) {
         console.log(`[ASR #${sid}] ignoring end event for stale session (active is #${currentSessionId})`);
         return;
@@ -718,7 +797,7 @@ async function executeListeningSession(
       startOptions.androidRecognitionServicePackage = servicePackage;
     }
 
-    ExpoSpeechRecognitionModule.start(startOptions);
+    mod.start(startOptions);
   } catch (err: any) {
     sessionState = 'idle';
     clearSubscriptions();
@@ -756,7 +835,10 @@ export async function stopListening(): Promise<void> {
   sessionState = 'stopping';
   console.log(`[ASR #${currentSessionId}] stopListening initiated by app (isManualStop=true)`);
   try {
-    ExpoSpeechRecognitionModule.stop();
+    const mod = getSpeechModule();
+    if (mod && mod.stop) {
+      mod.stop();
+    }
   } catch (err) {
     console.warn(`[ASR #${currentSessionId}] Error stopping recognizer:`, err);
   }
@@ -782,7 +864,10 @@ export async function abortListening(): Promise<void> {
   sessionState = 'stopping';
   clearSubscriptions();
   try {
-    ExpoSpeechRecognitionModule.abort();
+    const mod = getSpeechModule();
+    if (mod && mod.abort) {
+      mod.abort();
+    }
   } catch (err) {
     console.warn(`[ASR #${currentSessionId}] Error aborting recognizer:`, err);
   } finally {

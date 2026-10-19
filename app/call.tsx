@@ -25,6 +25,7 @@ import {
   checkOfflineLocaleInstalled,
   triggerOfflineModelDownload,
   checkDefaultRecognizer,
+  isAsrAvailable,
 } from '../src/services/voice/asr';
 import { warmupLlmContext } from '../src/services/voice/llm';
 import { CallSlotId } from '../src/config/callSchedule';
@@ -85,12 +86,15 @@ export default function CallScreen() {
     activeLocale: 'en-IN',
     isAllLocal: false,
     isLanguagePackMissing: false,
+    isAsrAvailable: isAsrAvailable(),
   });
 
   const [currentLocale, setCurrentLocale] = useState<AsrLocale>('en-IN');
+  const [typedMessage, setTypedMessage] = useState('');
   const [devInputText, setDevInputText] = useState('');
   const [localVoices, setLocalVoices] = useState<Voice[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>(undefined);
+  const asrAvailable = agentEvent.isAsrAvailable ?? isAsrAvailable();
 
   // Voice wave reactive animations
   const micAnim = useRef(new Animated.Value(1)).current;
@@ -245,6 +249,13 @@ export default function CallScreen() {
     setCurrentLocale(nextLocale);
   };
 
+  const handleSendTypedMessage = async () => {
+    const text = typedMessage.trim();
+    if (!text) return;
+    setTypedMessage('');
+    await callAgent.sendTextMessage(text);
+  };
+
   const handleSendDevText = async () => {
     if (!devInputText.trim()) return;
     const text = devInputText.trim();
@@ -330,7 +341,7 @@ export default function CallScreen() {
       case 'error':
         return 'Notice';
       case 'idle':
-        return agentEvent.tapToTalkMode ? 'Tap mic to talk' : 'Connected';
+        return !asrAvailable ? 'Type to reply' : agentEvent.tapToTalkMode ? 'Tap mic to talk' : 'Connected';
       default:
         return 'Connecting...';
     }
@@ -575,6 +586,8 @@ export default function CallScreen() {
                   agentEvent.userTranscript
                 ) : agentEvent.state === 'listening' ? (
                   <Text style={styles.captionListeningHint}>Listening...</Text>
+                ) : !asrAvailable ? (
+                  'Type your reply below...'
                 ) : (
                   '...'
                 )}
@@ -584,7 +597,58 @@ export default function CallScreen() {
 
           {/* Bottom Call Controls Bar */}
           <View style={styles.bottomControlsBar}>
-            {agentEvent.tapToTalkMode ? (
+            {!asrAvailable ? (
+              /* Fallback Typed Input Controls when ASR is unavailable */
+              <View style={styles.typedContainer}>
+                <View style={styles.asrFallbackNoticeBox}>
+                  <MaterialIcons name="info-outline" size={16} color={colors.amber} style={{ marginTop: 1 }} />
+                  <Text style={styles.asrFallbackNoticeText}>
+                    Voice input needs the installed app build. You can type your reply instead.
+                  </Text>
+                </View>
+                <View style={styles.typedInputRow}>
+                  <TextInput
+                    style={styles.typedInput}
+                    placeholder={
+                      agentEvent.state === 'thinking' || agentEvent.state === 'speaking'
+                        ? `${ASSISTANT_NAME} is replying...`
+                        : 'Type your reply...'
+                    }
+                    placeholderTextColor={colors.textDim}
+                    value={typedMessage}
+                    onChangeText={setTypedMessage}
+                    onSubmitEditing={handleSendTypedMessage}
+                    editable={agentEvent.state !== 'thinking' && agentEvent.state !== 'speaking'}
+                    returnKeyType="send"
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.typedSendBtn,
+                      (!typedMessage.trim() ||
+                        agentEvent.state === 'thinking' ||
+                        agentEvent.state === 'speaking') &&
+                        styles.typedSendBtnDisabled,
+                    ]}
+                    onPress={handleSendTypedMessage}
+                    disabled={
+                      !typedMessage.trim() ||
+                      agentEvent.state === 'thinking' ||
+                      agentEvent.state === 'speaking'
+                    }
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="send" size={20} color="#070e1c" />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.endCallCircleBtnSmall}
+                    onPress={handleEndCall}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialIcons name="call-end" size={24} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : agentEvent.tapToTalkMode ? (
               /* Tap-to-Talk Mode Controls */
               <View style={styles.controlsRow}>
                 {/* Mode Toggle Button: Switch back to Hands-Free */}
@@ -1556,5 +1620,65 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontStyle: 'italic',
     paddingVertical: space.xs,
+  },
+  asrFallbackNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1f1b0a',
+    borderWidth: 1,
+    borderColor: colors.amber + '66',
+    borderRadius: radius.md,
+    paddingHorizontal: space.sm,
+    paddingVertical: 8,
+    marginBottom: space.sm,
+  },
+  asrFallbackNoticeText: {
+    ...type.bodySm,
+    color: colors.amber,
+    fontSize: 12,
+    lineHeight: 16,
+    flex: 1,
+  },
+  typedContainer: {
+    width: '100%',
+    paddingBottom: space.xs,
+  },
+  typedInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    width: '100%',
+  },
+  typedInput: {
+    flex: 1,
+    height: 48,
+    backgroundColor: colors.cardLow,
+    borderWidth: 1,
+    borderColor: colors.outline,
+    borderRadius: radius.full,
+    paddingHorizontal: space.md,
+    color: colors.text,
+    fontSize: 14,
+  },
+  typedSendBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.teal,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  typedSendBtnDisabled: {
+    backgroundColor: colors.cardLow,
+    opacity: 0.5,
+  },
+  endCallCircleBtnSmall: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

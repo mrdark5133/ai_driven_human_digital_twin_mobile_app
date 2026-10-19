@@ -1,14 +1,4 @@
 import { Platform } from 'react-native';
-import {
-  initialize,
-  requestPermission,
-  readRecords,
-  aggregateRecord,
-  getSdkStatus,
-  SdkAvailabilityStatus,
-  HeartRateRecord,
-  StepsRecord,
-} from 'react-native-health-connect';
 
 export interface HeartRateDataPoint {
   bpm: number;
@@ -23,6 +13,46 @@ export interface StepsDataPoint {
   lastUpdated: string;
 }
 
+export interface HeartRateSample {
+  beatsPerMinute: number;
+  time: string;
+}
+
+export interface HeartRateRecord {
+  samples?: HeartRateSample[];
+}
+
+export interface StepsRecord {
+  count?: number;
+  startTime?: string;
+  endTime?: string;
+}
+
+let healthConnectMod: any = null;
+let healthConnectChecked = false;
+
+function getHealthConnectModule(): any {
+  if (Platform.OS !== 'android') return null;
+  if (!healthConnectChecked) {
+    healthConnectChecked = true;
+    try {
+      const mod = require('react-native-health-connect');
+      healthConnectMod = mod;
+    } catch (err: any) {
+      console.log('[HealthConnect] react-native-health-connect not available on this build:', err);
+      healthConnectMod = null;
+    }
+  }
+  return healthConnectMod;
+}
+
+/**
+ * Checks whether native Health Connect is available on this device and build.
+ */
+export function isHealthConnectAvailable(): boolean {
+  return !!getHealthConnectModule();
+}
+
 let isModuleAvailable: boolean | null = null;
 let isInitialized = false;
 let initPromise: Promise<boolean> | null = null;
@@ -33,6 +63,12 @@ let initPromise: Promise<boolean> | null = null;
  */
 export async function initHealthConnect(): Promise<boolean> {
   if (Platform.OS !== 'android') {
+    return false;
+  }
+
+  const mod = getHealthConnectModule();
+  if (!mod) {
+    isModuleAvailable = false;
     return false;
   }
 
@@ -50,12 +86,22 @@ export async function initHealthConnect(): Promise<boolean> {
 
   initPromise = (async () => {
     try {
-      const status = await getSdkStatus();
-      isModuleAvailable = true;
-      if (status !== SdkAvailabilityStatus.SDK_AVAILABLE) {
+      const getSdkStatusFn = mod.getSdkStatus;
+      const initializeFn = mod.initialize;
+      const SdkStatusEnum = mod.SdkAvailabilityStatus || {};
+      const SDK_AVAILABLE_VAL = SdkStatusEnum.SDK_AVAILABLE ?? 3;
+
+      if (!getSdkStatusFn || !initializeFn) {
+        isModuleAvailable = false;
         return false;
       }
-      const initialized = await initialize();
+
+      const status = await getSdkStatusFn();
+      isModuleAvailable = true;
+      if (status !== SDK_AVAILABLE_VAL) {
+        return false;
+      }
+      const initialized = await initializeFn();
       isInitialized = !!initialized;
       return isInitialized;
     } catch (err: any) {
@@ -92,8 +138,13 @@ export async function requestPermissions(): Promise<boolean> {
     return false;
   }
 
+  const mod = getHealthConnectModule();
+  if (!mod || !mod.requestPermission) {
+    return false;
+  }
+
   try {
-    const granted = await requestPermission([
+    const granted = await mod.requestPermission([
       { accessType: 'read', recordType: 'HeartRate' },
       { accessType: 'read', recordType: 'Steps' },
     ]);
@@ -118,10 +169,15 @@ export async function getLatestHeartRate(): Promise<HeartRateDataPoint | null> {
     return null;
   }
 
+  const mod = getHealthConnectModule();
+  if (!mod || !mod.readRecords) {
+    return null;
+  }
+
   try {
     // Read heart rate records within the last 30 days without dataOriginFilter to read from all data sources
     const startTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const result = await readRecords('HeartRate', {
+    const result = await mod.readRecords('HeartRate', {
       timeRangeFilter: {
         operator: 'after',
         startTime,
@@ -178,11 +234,16 @@ export async function getTodayHeartRates(): Promise<HeartRateDataPoint[] | null>
     return null;
   }
 
+  const mod = getHealthConnectModule();
+  if (!mod || !mod.readRecords) {
+    return null;
+  }
+
   try {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
-    const result = await readRecords('HeartRate', {
+    const result = await mod.readRecords('HeartRate', {
       timeRangeFilter: {
         operator: 'after',
         startTime: startOfDay.toISOString(),
@@ -239,12 +300,17 @@ export async function getTodaySteps(): Promise<StepsDataPoint | null> {
     return null;
   }
 
+  const mod = getHealthConnectModule();
+  if (!mod || !mod.aggregateRecord) {
+    return null;
+  }
+
   try {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
     const now = new Date();
 
-    const result = await aggregateRecord({
+    const result = await mod.aggregateRecord({
       recordType: 'Steps',
       timeRangeFilter: {
         operator: 'between',

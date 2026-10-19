@@ -30,8 +30,21 @@ export function isNotificationAvailable(): boolean {
 
   try {
     const mod = require('expo-notifications');
-    if (mod && (mod.scheduleNotificationAsync || mod.default?.scheduleNotificationAsync)) {
-      notificationsModule = mod.scheduleNotificationAsync ? mod : mod.default;
+    if (mod) {
+      notificationsModule = {
+        ...(mod.default || {}),
+        ...mod,
+        SchedulableTriggerInputTypes: mod.SchedulableTriggerInputTypes || mod.default?.SchedulableTriggerInputTypes || {
+          DAILY: 'daily',
+          TIME_INTERVAL: 'timeInterval',
+        },
+        AndroidImportance: mod.AndroidImportance || mod.default?.AndroidImportance || {
+          MAX: 5,
+        },
+        AndroidNotificationVisibility: mod.AndroidNotificationVisibility || mod.default?.AndroidNotificationVisibility || {
+          PUBLIC: 1,
+        },
+      };
     }
   } catch (err) {
     console.log('[CallScheduler] expo-notifications not available on this APK build:', err);
@@ -97,10 +110,10 @@ export async function setupNotificationChannels(): Promise<void> {
       await Notifications.setNotificationChannelAsync('aura-calls-v2', {
         name: `${ASSISTANT_NAME} Calls`,
         description: `Scheduled incoming check-in calls from ${ASSISTANT_NAME}`,
-        importance: Notifications.AndroidImportance.MAX,
+        importance: Notifications.AndroidImportance?.MAX ?? 5,
         vibrationPattern: [0, 600, 300, 600, 300, 600],
         lightColor: '#4cd7f6',
-        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility?.PUBLIC ?? 1,
         bypassDnd: true,
         enableVibrate: true,
       });
