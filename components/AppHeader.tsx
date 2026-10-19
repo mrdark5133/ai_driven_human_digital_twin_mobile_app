@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons as Icon } from '@expo/vector-icons';
 import { colors, space, type } from '../theme/tokens';
 
-export default function AppHeader({ syncText = 'Noise ColorFit • Synced 2m ago' }: { syncText?: string }) {
+export default function AppHeader({ syncText = 'No data yet' }: { syncText?: string }) {
   const insets = useSafeAreaInsets();
   return (
     <View style={[s.bar, { paddingTop: insets.top, height: 64 + insets.top }]}>

@@ -17,6 +17,7 @@ import { Header } from '../../components/Header';
 import { DataService } from '../../services/dataService';
 import { UserProfile, TelemetrySettings, WatchDevice } from '../../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isHealthConnectAvailable } from '../../src/services/healthConnect';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function ProfileScreen() {
   const [watch, setWatch] = useState<WatchDevice>(DataService.getWatch());
   const [settings, setSettings] = useState<TelemetrySettings>(DataService.getSettings());
   const [isSyncing, setIsSyncing] = useState(false);
+  const isHcAvailable = isHealthConnectAvailable();
 
   useEffect(() => {
     // Check for stored smoking status on mount
@@ -169,7 +171,7 @@ export default function ProfileScreen() {
               <MaterialIcons name="watch" size={18} color={colors.secondary} />
               <Text style={styles.sectionHeaderTitle}>Connected Device</Text>
             </View>
-            <Text style={styles.devicesOnlineText}>1 device</Text>
+            <Text style={styles.devicesOnlineText}>{watch.isConnected ? '1 device' : '0 devices'}</Text>
           </View>
 
           {/* Watch Card */}
@@ -185,15 +187,21 @@ export default function ProfileScreen() {
                 </View>
               </View>
 
-              <View style={styles.batteryGroup}>
-                <View style={styles.batteryPill}>
-                  <MaterialIcons name="battery-5-bar" size={14} color={colors.tertiary} />
-                  <Text style={styles.batteryText}>{watch.batteryPercent}%</Text>
+              {watch.isConnected && watch.batteryPercent > 0 ? (
+                <View style={styles.batteryGroup}>
+                  <View style={styles.batteryPill}>
+                    <MaterialIcons name="battery-5-bar" size={14} color={colors.tertiary} />
+                    <Text style={styles.batteryText}>{watch.batteryPercent}%</Text>
+                  </View>
+                  <View style={styles.batteryBarTrack}>
+                    <View style={[styles.batteryBarFill, { width: `${watch.batteryPercent}%` }]} />
+                  </View>
                 </View>
-                <View style={styles.batteryBarTrack}>
-                  <View style={[styles.batteryBarFill, { width: `${watch.batteryPercent}%` }]} />
+              ) : (
+                <View style={[styles.batteryPill, { backgroundColor: colors.surfaceContainerHighest }]}>
+                  <Text style={[styles.batteryText, { color: colors.onSurfaceVariant }]}>Offline</Text>
                 </View>
-              </View>
+              )}
             </View>
 
             {/* Sync Status & Force Sync Button */}
@@ -298,8 +306,20 @@ export default function ProfileScreen() {
               </View>
             </View>
             <View style={styles.healthConnectChip}>
-              <View style={styles.healthConnectDot} />
-              <Text style={styles.healthConnectChipText}>Connected</Text>
+              <View
+                style={[
+                  styles.healthConnectDot,
+                  !isHcAvailable && { backgroundColor: colors.outline },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.healthConnectChipText,
+                  !isHcAvailable && { color: colors.outline },
+                ]}
+              >
+                {isHcAvailable ? 'Available' : 'Not installed'}
+              </Text>
             </View>
           </View>
         </View>

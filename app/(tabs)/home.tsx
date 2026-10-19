@@ -16,7 +16,7 @@ import {
 } from '../../src/services/healthConnect';
 import { ASSISTANT_NAME } from '../../src/config/appConfig';
 import { computeRealDeviceRisks } from '../../src/services/riskDataService';
-import { RiskCategoryResult } from '../../src/services/riskEngine';
+import { RiskCategoryResult, computeHealthScore } from '../../src/services/riskEngine';
 
 const DEFAULT_CHIP_CATEGORIES: RiskCategoryResult[] = [
   { category: 'Cardiovascular', level: 'Unknown', confidence: 'partial', color: '#9CA3AF', explanation: '', drivers: [], missing: [], displayText: 'Need data', score: 0.15 },
@@ -222,6 +222,7 @@ export default function Home() {
   const stepGoal = 10000;
   const stepPercent = stepCount !== null ? Math.min(100, Math.round((stepCount / stepGoal) * 100)) : 0;
   const headerSync = formatSyncHeader(vitals, stepsData);
+  const healthScore = computeHealthScore(riskResults);
 
   return (
     <View style={s.screen}>
@@ -244,22 +245,17 @@ export default function Home() {
           <Text style={s.h1}>{greeting}, Dark</Text>
         </View>
 
-        {/* Health Score Card with DEMO Tag */}
+        {/* Health Score Card */}
         <View style={[s.card, s.scoreCard]}>
           <View style={{ flex: 1 }}>
             <View style={s.scoreHeadRow}>
               <Text style={s.overall}>Overall status</Text>
-              <Tag text="Demo" color={colors.amber} />
             </View>
             <Text style={s.h2}>Health score</Text>
             <Text style={[s.bodySm, { marginVertical: space.sm }]}>
-              Demo score • Risk model in training
+              {healthScore !== null ? 'Rule-based estimate' : 'Add profile and sleep data to see your score'}
             </Text>
             <View style={s.pillRow}>
-              <View style={s.pill}>
-                <View style={s.pillDot} />
-                <Text style={[s.label, { color: colors.primary }]}>Baseline reference</Text>
-              </View>
               {hasComputedRisk && highestRiskLevel ? (
                 (() => {
                   const isTopPartialLow =
@@ -292,7 +288,7 @@ export default function Home() {
               ) : null}
             </View>
           </View>
-          <ScoreRing score={78} />
+          <ScoreRing score={healthScore} />
         </View>
 
         {/* 2x2 Telemetry Grid */}

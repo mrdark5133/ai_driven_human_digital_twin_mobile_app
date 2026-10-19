@@ -22,6 +22,8 @@ import { streamLlmResponse, ChatTurn, warmupLlmContext } from '../../src/service
 import { isModelDownloaded, downloadModel } from '../../src/services/voice/modelManager';
 import { ASSISTANT_NAME } from '../../src/config/appConfig';
 import { getCachedRiskContextLine, getRiskContextLine } from '../../src/services/riskModel';
+import { getCurrentVitals } from '../../src/services/vitals';
+import { getTodaySteps } from '../../src/services/healthConnect';
 
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(DataService.getChatHistory());
@@ -29,6 +31,10 @@ export default function AssistantScreen() {
   const [isListening, setIsListening] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
+
+  // Real vitals for LLM grounding
+  const [realHeartRate, setRealHeartRate] = useState<number | null>(null);
+  const [realSteps, setRealSteps] = useState<number | null>(null);
 
   // Model status & download state
   const [isModelReady, setIsModelReady] = useState<boolean | null>(null);
@@ -38,18 +44,17 @@ export default function AssistantScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
 
   /**
-   * Builds the vitals context card (3-4 lines) from DataService for the LLM system prompt.
+   * Builds the vitals context card (3-4 lines) from real sources for the LLM system prompt.
    * Instructs the model to strictly use only these numbers and never hallucinate.
    */
   const buildSystemPromptWithVitals = (): string => {
-    const vitals = DataService.getVitals();
     const riskLine = getCachedRiskContextLine();
     const vitalsCard = [
       `CURRENT USER VITALS:`,
-      `- Heart Rate: ${vitals.heartRate} BPM (${vitals.heartRateTrend || 'nominal'})`,
-      `- Sleep: ${vitals.sleepHours}h ${vitals.sleepMinutes}m (Sleep Score: ${vitals.sleepScore}%)`,
-      `- Activity: ${vitals.steps.toLocaleString()} / ${vitals.stepGoal.toLocaleString()} steps`,
-      `- Stress Index: ${vitals.stressIndex}/100 (${vitals.stressStatus || 'Normal'})`,
+      `- Heart Rate: ${realHeartRate ? `${realHeartRate} BPM` : 'Awaiting readings'}`,
+      `- Sleep: Awaiting call with ${ASSISTANT_NAME}`,
+      `- Activity: ${realSteps !== null ? `${realSteps.toLocaleString()} / 10,000 steps` : 'Awaiting step data'}`,
+      `- Stress Index: Coming soon`,
       `- ${riskLine}`,
     ].join('\n');
 
@@ -66,6 +71,13 @@ CRITICAL RULES:
   useEffect(() => {
     let active = true;
     getRiskContextLine().catch(() => {});
+    getCurrentVitals().then((v) => {
+      if (active && v?.heartRate?.value) setRealHeartRate(v.heartRate.value);
+    }).catch(() => {});
+    getTodaySteps().then((s) => {
+      if (active && s?.count !== null && s?.count !== undefined) setRealSteps(s.count);
+    }).catch(() => {});
+
     isModelDownloaded().then((ready) => {
       if (active) {
         setIsModelReady(ready);
@@ -413,88 +425,96 @@ CRITICAL RULES:
           <View style={styles.conversationList}>
             <View style={styles.convoHeaderRow}>
               <Text style={styles.convoTitle}>Conversation</Text>
-              <View style={styles.demoPill}>
-                <Text style={styles.demoText}>Demo data</Text>
-              </View>
             </View>
 
-            {messages.map((msg) => {
-              const isUser = msg.sender === 'user';
-              const isCurrentlyStreaming = msg.id === streamingMsgId;
+            {messages.length === 0 ? (
+              <View style={styles.emptyConvoContainer}>
+                <MaterialIcons
+                  name="chat-bubble-outline"
+                  size={36}
+                  color={colors.outline}
+                  style={{ marginBottom: 10 }}
+                />
+                <Text style={styles.emptyConvoTitle}>No messages yet</Text>
+                <Text style={styles.emptyConvoSub}>
+                  Ask {ASSISTANT_NAME} about your resting heart rate, sleep duration, or lifestyle habits.
+                </Text>
+              </View>
+            ) : (
+              messages.map((msg) => {
+                const isUser = msg.sender === 'user';
+                const isCurrentlyStreaming = msg.id === streamingMsgId;
 
-              return (
-                <View
-                  key={msg.id}
-                  style={[
-                    styles.messageRow,
-                    isUser ? styles.userMessageRow : styles.auraMessageRow,
-                  ]}
-                >
-                  <View style={styles.msgHeader}>
-                    <MaterialIcons
-                      name={isUser ? 'person' : 'psychology'}
-                      size={14}
-                      color={isUser ? colors.primary : colors.secondary}
-                    />
-                    <Text
-                      style={[
-                        styles.msgSender,
-                        { color: isUser ? colors.primary : colors.secondary },
-                      ]}
-                    >
-                      {isUser ? 'You' : ASSISTANT_NAME}
-                    </Text>
-                    <Text style={styles.msgTime}>{msg.timeStr}</Text>
-                  </View>
-
+                return (
                   <View
+                    key={msg.id}
                     style={[
-                      styles.msgBubble,
-                      isUser ? styles.userBubble : styles.auraBubble,
+                      styles.messageRow,
+                      isUser ? styles.userMessageRow : styles.auraMessageRow,
                     ]}
                   >
-                    {isCurrentlyStreaming && !msg.text ? (
-                      /* Typing Indicator */
-                      <View style={styles.typingIndicatorRow}>
-                        <ActivityIndicator size="small" color={colors.secondary} />
-                        <Text style={styles.typingText}>{ASSISTANT_NAME} is thinking...</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.msgBodyText}>
-                        {msg.text}
-                        {isCurrentlyStreaming && (
-                          <Text style={{ color: colors.secondary }}> ▍</Text>
-                        )}
+                    <View style={styles.msgHeader}>
+                      <MaterialIcons
+                        name={isUser ? 'person' : 'psychology'}
+                        size={14}
+                        color={isUser ? colors.primary : colors.secondary}
+                      />
+                      <Text
+                        style={[
+                          styles.msgSender,
+                          { color: isUser ? colors.primary : colors.secondary },
+                        ]}
+                      >
+                        {isUser ? 'You' : ASSISTANT_NAME}
                       </Text>
-                    )}
+                      <Text style={styles.msgTime}>{msg.timeStr}</Text>
+                    </View>
 
-                    {/* Embedded Health Widget Card (preserves demo data badges) */}
-                    {msg.telemetryWidget ? (
-                      <View style={styles.embeddedWidget}>
-                        <View style={styles.widgetLeft}>
-                          <View style={styles.widgetIconBox}>
-                            <MaterialIcons name="bedtime" size={16} color={colors.secondary} />
-                          </View>
-                          <View>
-                            <Text style={styles.widgetLabel}>
-                              {msg.telemetryWidget.label}:{' '}
-                              <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
-                            </Text>
-                            <Text style={styles.widgetSuggestion}>
-                              {msg.telemetryWidget.suggestion || msg.telemetryWidget.targetStrain}
-                            </Text>
+                    <View
+                      style={[
+                        styles.msgBubble,
+                        isUser ? styles.userBubble : styles.auraBubble,
+                      ]}
+                    >
+                      {isCurrentlyStreaming && !msg.text ? (
+                        /* Typing Indicator */
+                        <View style={styles.typingIndicatorRow}>
+                          <ActivityIndicator size="small" color={colors.secondary} />
+                          <Text style={styles.typingText}>{ASSISTANT_NAME} is thinking...</Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.msgBodyText}>
+                          {msg.text}
+                          {isCurrentlyStreaming && (
+                            <Text style={{ color: colors.secondary }}> ▍</Text>
+                          )}
+                        </Text>
+                      )}
+
+                      {/* Embedded Health Widget Card */}
+                      {msg.telemetryWidget ? (
+                        <View style={styles.embeddedWidget}>
+                          <View style={styles.widgetLeft}>
+                            <View style={styles.widgetIconBox}>
+                              <MaterialIcons name="bedtime" size={16} color={colors.secondary} />
+                            </View>
+                            <View>
+                              <Text style={styles.widgetLabel}>
+                                {msg.telemetryWidget.label}:{' '}
+                                <Text style={styles.widgetVal}>{msg.telemetryWidget.value}</Text>
+                              </Text>
+                              <Text style={styles.widgetSuggestion}>
+                                {msg.telemetryWidget.suggestion || msg.telemetryWidget.targetStrain}
+                              </Text>
+                            </View>
                           </View>
                         </View>
-
-                        <View style={styles.demoPillSmall}>
-                          <Text style={styles.demoTextSmall}>Demo data</Text>
-                        </View>
-                      </View>
-                    ) : null}
+                      ) : null}
+                    </View>
                   </View>
-                </View>
-              );
-            })}
+                );
+              })
+            )}
           </View>
         </ScrollView>
 
@@ -1030,5 +1050,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'none',
     marginTop: 2,
+  },
+  emptyConvoContainer: {
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyConvoTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  emptyConvoSub: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
   },
 });

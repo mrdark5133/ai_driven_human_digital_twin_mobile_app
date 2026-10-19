@@ -40,8 +40,13 @@ export const Header: React.FC<HeaderProps> = ({ screenTitle, onProfilePress }) =
           {/* Sync indicator pill */}
           <View style={styles.statusPill}>
             <View style={styles.liveDotWrapper}>
-              <View style={styles.liveDotPing} />
-              <View style={styles.liveDot} />
+              {watch.isConnected && <View style={styles.liveDotPing} />}
+              <View
+                style={[
+                  styles.liveDot,
+                  !watch.isConnected && { backgroundColor: colors.outline },
+                ]}
+              />
             </View>
             <Text style={styles.statusText} numberOfLines={1}>
               {watch.lastSyncedText}

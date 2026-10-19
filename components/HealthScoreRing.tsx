@@ -4,7 +4,7 @@ import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { colors, typography } from '../theme';
 
 interface HealthScoreRingProps {
-  score: number;
+  score?: number | null;
   maxScore?: number;
   statusLabel?: string;
   size?: number;
@@ -12,15 +12,17 @@ interface HealthScoreRingProps {
 }
 
 export const HealthScoreRing: React.FC<HealthScoreRingProps> = ({
-  score = 78,
+  score = null,
   maxScore = 100,
   statusLabel = 'Optimal',
   size = 176,
   strokeWidth = 10,
 }) => {
+  const hasScore = score !== null && typeof score === 'number' && !isNaN(score);
+  const numericScore = hasScore ? score : 0;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const progress = Math.min(Math.max(score / maxScore, 0), 1);
+  const progress = hasScore ? Math.min(Math.max(numericScore / maxScore, 0), 1) : 0;
   const strokeDashoffset = circumference * (1 - progress);
 
   return (
@@ -63,10 +65,10 @@ export const HealthScoreRing: React.FC<HealthScoreRingProps> = ({
       {/* Central Number & Status */}
       <View style={styles.centerContent}>
         <View style={styles.scoreRow}>
-          <Text style={styles.scoreText}>{score}</Text>
-          <Text style={styles.maxScoreText}>/{maxScore}</Text>
+          <Text style={styles.scoreText}>{hasScore ? score : '--'}</Text>
+          {hasScore && <Text style={styles.maxScoreText}>/{maxScore}</Text>}
         </View>
-        <Text style={styles.statusBadge}>{statusLabel}</Text>
+        <Text style={styles.statusBadge}>{hasScore ? statusLabel : 'Awaiting data'}</Text>
       </View>
     </View>
   );

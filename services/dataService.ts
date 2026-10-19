@@ -44,51 +44,51 @@ let watchState: WatchDevice = {
   name: 'Noise ColorFit Watch',
   connectionType: 'Android Health Connect',
   bleVersion: 'BLE 5.3 Active',
-  batteryPercent: 84,
-  lastSyncedText: 'Noise ColorFit • Synced 2m ago',
-  isConnected: true,
+  batteryPercent: 0,
+  lastSyncedText: 'No data yet',
+  isConnected: false,
 };
 
 let vitalsState: VitalsMetrics = {
-  bioIndex: 78,
-  bioIndexStatus: 'Optimal',
-  predictiveVariance: 1.4,
-  cardioScore: 91,
-  cardioTrend: '↑ +2%',
-  recoveryScore: 84,
-  recoveryTrend: '↓ -4%',
-  metabolicScore: 89,
-  metabolicTrend: 'Steady',
+  bioIndex: 0,
+  bioIndexStatus: 'Awaiting data',
+  predictiveVariance: 0,
+  cardioScore: 0,
+  cardioTrend: 'Awaiting readings',
+  recoveryScore: 0,
+  recoveryTrend: 'Awaiting readings',
+  metabolicScore: 0,
+  metabolicTrend: 'Awaiting data',
 
-  heartRate: 72,
-  heartRateTrend: '+3 bpm vs 7d avg',
-  stressIndex: 38,
-  stressStatus: 'Calm Sympathetic Tone',
-  hrv: 64,
+  heartRate: 0,
+  heartRateTrend: 'Awaiting readings',
+  stressIndex: 0,
+  stressStatus: 'Awaiting data',
+  hrv: 0,
 
-  // Sleep breakdown matching user requirement
-  sleepHours: 6,
-  sleepMinutes: 40,
-  sleepScore: 89,
-  sleepDeep: '1h 15m',
-  sleepLight: '4h 30m',
-  sleepAwake: '55m',
-  sleepRem: '2h 10m',
-  sleepSummaryText: 'Score 89 • Rejuvenated',
+  // Sleep breakdown
+  sleepHours: 0,
+  sleepMinutes: 0,
+  sleepScore: 0,
+  sleepDeep: '0m',
+  sleepLight: '0m',
+  sleepAwake: '0m',
+  sleepRem: '0m',
+  sleepSummaryText: 'Awaiting sleep data',
 
-  steps: 5840,
+  steps: 0,
   stepGoal: 10000,
-  activeKcal: 340,
-  activityPercent: 58,
+  activeKcal: 0,
+  activityPercent: 0,
 
   // SpO2 Flag
   showSpO2: true,
-  spo2: 98.8,
-  respiratoryRate: 14,
-  lungVolumeLiters: 4.8,
-  neuralLoadPercent: 32,
-  alphaWavesHz: 10.4,
-  circadianPhase: 'Phase 3 (Peak Alertness)',
+  spo2: 0,
+  respiratoryRate: 0,
+  lungVolumeLiters: 0,
+  neuralLoadPercent: 0,
+  alphaWavesHz: 0,
+  circadianPhase: 'Awaiting data',
 };
 
 let settingsState: TelemetrySettings = {
@@ -196,98 +196,11 @@ const organDetailsMap: Record<OrganSystemKey, OrganDetail> = {
   },
 };
 
-const anomaliesList: AnomalyEvent[] = [
-  {
-    id: 'anom-1',
-    timeStr: '04:12 AM Today',
-    title: 'Elevated resting heart rate (+18 bpm) sustained for 14m during REM sleep.',
-    tag: 'Heart rate',
-    description: 'Heart rate increased to 90 bpm for 14 minutes during sleep.',
-    severity: 'amber',
-  },
-  {
-    id: 'anom-2',
-    timeStr: '18:45 Yesterday',
-    title: 'Higher stress level during evening commute.',
-    tag: 'Stress',
-    description: 'Higher stress level detected during evening commute based on heart rate.',
-    severity: 'cyan',
-  },
-  {
-    id: 'anom-3',
-    timeStr: '02:30 Oct 01',
-    title: 'Blood oxygen dip during sleep.',
-    tag: 'Oxygen',
-    description: 'Blood oxygen dipped to 94% during sleep.',
-    severity: 'amber',
-  },
-];
+const anomaliesList: AnomalyEvent[] = [];
 
-const recommendationsList: AIRecommendation[] = [
-  {
-    id: 'rec-1',
-    category: 'sleep',
-    priorityLabel: 'SLEEP',
-    timeHint: 'Target 22:30',
-    title: 'Try going to bed by 22:30',
-    prediction: '+18m more deep sleep',
-    rationale: 'Going to bed slightly earlier helps you recover from staying up late over the past 3 nights.',
-    actionLabel: 'Set bedtime reminder',
-    actionIcon: 'bedtime',
-    accentColor: '#fbbf24',
-  },
-  {
-    id: 'rec-2',
-    category: 'stress',
-    priorityLabel: 'STRESS',
-    timeHint: 'Around 13:00',
-    title: '5-Minute breathing exercise',
-    prediction: 'Helps lower stress',
-    rationale: 'Taking a 5-minute breathing break after lunch helps keep your afternoon stress low.',
-    actionLabel: 'Start breathing exercise',
-    actionIcon: 'self-improvement',
-    accentColor: '#5de6ff',
-  },
-  {
-    id: 'rec-4',
-    category: 'activity',
-    priorityLabel: 'ACTIVITY',
-    timeHint: '20 Mins',
-    title: '20-Minute light walk or jog',
-    prediction: 'Builds daily stamina',
-    rationale: 'A light 20-minute walk helps keep your resting heart rate healthy and improves recovery.',
-    actionLabel: 'Start activity',
-    actionIcon: 'map',
-    accentColor: '#869397',
-  },
-];
+const recommendationsList: AIRecommendation[] = [];
 
-let chatMessages: ChatMessage[] = [
-  {
-    id: 'msg-1',
-    sender: 'aura',
-    text: 'Hi Dark, your heart rate went up to 90 bpm at 4:12 AM while you were sleeping. It is back to normal now (60-80 bpm). How are you feeling this morning?',
-    timeStr: '08:14 AM',
-  },
-  {
-    id: 'msg-2',
-    sender: 'user',
-    text: 'I feel a little tired, but fine. Should I work out today?',
-    timeStr: '08:15 AM',
-    isVoice: true,
-  },
-  {
-    id: 'msg-3',
-    sender: 'aura',
-    text: 'Your sleep was a bit short, so a light workout like a walk is a better choice today than hard exercise.',
-    timeStr: '08:15 AM',
-    telemetryWidget: {
-      label: 'Sleep last night',
-      value: '6h 10m',
-      suggestion: 'Suggested: Light activity',
-    },
-  },
-];
+let chatMessages: ChatMessage[] = [];
 
 // Listeners for reactivity
 type Listener = () => void;
@@ -424,12 +337,11 @@ export const DataService = {
   },
 
   async triggerWatchSync(): Promise<void> {
-    // TODO: [Health Connect] Hook into Android Health Connect SDK to read continuous records
     return new Promise((resolve) => {
       setTimeout(() => {
         watchState = {
           ...watchState,
-          lastSyncedText: 'WATCH CONNECTED, SYNCED JUST NOW',
+          lastSyncedText: 'Synced just now',
         };
         notify();
         resolve();
@@ -445,78 +357,13 @@ export const DataService = {
     heartRatePoints: HeartRateHistoryPoint[];
     stressDays: StressHistoryDay[];
   } {
-    if (timeframe === 'day') {
-      return {
-        avgBpm: 68,
-        minBpm: 56,
-        maxBpm: 92,
-        riskPercent: 12,
-        heartRatePoints: [
-          { day: '00:00', bpm: 58 },
-          { day: '04:00', bpm: 90 },
-          { day: '08:00', bpm: 72 },
-          { day: '12:00', bpm: 78 },
-          { day: '16:00', bpm: 74 },
-          { day: '20:00', bpm: 66 },
-          { day: 'Now', bpm: 72 },
-        ],
-        stressDays: [
-          { dayLabel: '04h', calmPercent: 90, elevatedPercent: 10 },
-          { dayLabel: '08h', calmPercent: 75, elevatedPercent: 25 },
-          { dayLabel: '12h', calmPercent: 60, elevatedPercent: 40 },
-          { dayLabel: '16h', calmPercent: 80, elevatedPercent: 20 },
-          { dayLabel: '20h', calmPercent: 85, elevatedPercent: 15 },
-          { dayLabel: '22h', calmPercent: 95, elevatedPercent: 5 },
-          { dayLabel: 'Now', calmPercent: 80, elevatedPercent: 20 },
-        ],
-      };
-    }
-
-    if (timeframe === 'month') {
-      return {
-        avgBpm: 59,
-        minBpm: 49,
-        maxBpm: 88,
-        riskPercent: 15,
-        heartRatePoints: [
-          { day: 'W1', bpm: 60 },
-          { day: 'W2', bpm: 58 },
-          { day: 'W3', bpm: 62 },
-          { day: 'W4', bpm: 57 },
-        ],
-        stressDays: [
-          { dayLabel: 'W1', calmPercent: 70, elevatedPercent: 30 },
-          { dayLabel: 'W2', calmPercent: 85, elevatedPercent: 15 },
-          { dayLabel: 'W3', calmPercent: 65, elevatedPercent: 35 },
-          { dayLabel: 'W4', calmPercent: 80, elevatedPercent: 20 },
-        ],
-      };
-    }
-
-    // Default: 'week'
     return {
-      avgBpm: 58,
-      minBpm: 52,
-      maxBpm: 84,
-      riskPercent: 14,
-      heartRatePoints: [
-        { day: 'MON', bpm: 60 },
-        { day: 'TUE', bpm: 57 },
-        { day: 'WED', bpm: 64 },
-        { day: 'THU', bpm: 55 },
-        { day: 'FRI', bpm: 59 },
-        { day: 'SAT', bpm: 53 },
-        { day: 'TODAY', bpm: 58 },
-      ],
-      stressDays: [
-        { dayLabel: 'M', calmPercent: 80, elevatedPercent: 20 },
-        { dayLabel: 'T', calmPercent: 60, elevatedPercent: 40 },
-        { dayLabel: 'W', calmPercent: 85, elevatedPercent: 15 },
-        { dayLabel: 'T', calmPercent: 45, elevatedPercent: 55 },
-        { dayLabel: 'F', calmPercent: 75, elevatedPercent: 25 },
-        { dayLabel: 'S', calmPercent: 90, elevatedPercent: 10 },
-        { dayLabel: 'S', calmPercent: 80, elevatedPercent: 20 },
-      ],
+      avgBpm: 0,
+      minBpm: 0,
+      maxBpm: 0,
+      riskPercent: 0,
+      heartRatePoints: [],
+      stressDays: [],
     };
   },
 };

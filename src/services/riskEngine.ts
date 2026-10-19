@@ -475,3 +475,20 @@ export function evaluateRisks(input: RiskInput = {}): RiskCategoryResult[] {
     evaluateLifestyle(input),
   ];
 }
+
+/**
+ * Computes the overall health score (0-100) based on evaluated risk categories.
+ * Formula: healthScore = round(100 - 70 * average(score of the categories whose level is not "Unknown"))
+ * Only computed if at least 2 categories have data; otherwise returns null.
+ */
+export function computeHealthScore(results: RiskCategoryResult[]): number | null {
+  if (!Array.isArray(results)) return null;
+  const known = results.filter((r) => r.level !== 'Unknown');
+  if (known.length < 2) {
+    return null;
+  }
+  const avgRisk = known.reduce((sum, r) => sum + r.score, 0) / known.length;
+  const score = Math.round(100 - 70 * avgRisk);
+  return Math.max(0, Math.min(100, score));
+}
+

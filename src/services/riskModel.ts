@@ -15,6 +15,7 @@ import {
 } from './riskModelCore';
 import { DataService } from '../../services/dataService';
 import { getCurrentVitals } from './vitals';
+import { getTodaySteps } from './healthConnect';
 
 export type RiskInputSource = 'profile' | 'watch' | 'call' | 'demo';
 
@@ -148,11 +149,19 @@ export async function buildRiskInputs(): Promise<{
     sources.heart_rate = 'demo';
   }
 
-  // 5. Daily Steps: 7-day average if available, else today's steps
+  // 5. Daily Steps: real step counter from Health Connect / phone if available
   let dailySteps = 6000;
-  if (vitals && typeof vitals.steps === 'number') {
-    dailySteps = vitals.steps;
-    sources.daily_steps = 'demo';
+  try {
+    const stepsRes = await getTodaySteps();
+    if (stepsRes && typeof stepsRes.count === 'number' && !isNaN(stepsRes.count)) {
+      dailySteps = stepsRes.count;
+      sources.daily_steps = 'watch';
+    } else if (vitals && typeof vitals.steps === 'number' && vitals.steps > 0) {
+      dailySteps = vitals.steps;
+      sources.daily_steps = 'watch';
+    }
+  } catch (err) {
+    // Keep fallback
   }
 
   // 6. Sleep Duration: sleep hours + sleep minutes

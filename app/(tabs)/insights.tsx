@@ -17,17 +17,22 @@ import { InterventionCard } from '../../components/InterventionCard';
 import { DataService } from '../../services/dataService';
 import { InsightsTimeframe, AIRecommendation } from '../../types';
 import { getRiskAssessment, RiskAssessment, RiskBand } from '../../src/services/riskModel';
+import { getTodayHeartRates, HeartRateDataPoint } from '../../src/services/healthConnect';
 
 export default function InsightsScreen() {
   const [timeframe, setTimeframe] = useState<InsightsTimeframe>('week');
   const [directiveCategory, setDirectiveCategory] = useState<string>('all');
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
+  const [todayHeartRates, setTodayHeartRates] = useState<HeartRateDataPoint[]>([]);
   const [showAboutModel, setShowAboutModel] = useState(false);
 
   useEffect(() => {
     let active = true;
     getRiskAssessment().then((res) => {
       if (active) setRiskAssessment(res);
+    });
+    getTodayHeartRates().then((pts) => {
+      if (active && pts) setTodayHeartRates(pts);
     });
     return () => {
       active = false;
@@ -54,7 +59,7 @@ export default function InsightsScreen() {
     };
     Object.entries(riskAssessment.sources).forEach(([feat, src]) => {
       const srcName =
-        src === 'profile' ? 'Profile' : src === 'watch' ? 'Watch' : src === 'call' ? 'Call' : 'Demo';
+        src === 'profile' ? 'Profile' : src === 'watch' ? 'Watch' : src === 'call' ? 'Call' : 'Coming soon';
       if (!groups[srcName]) groups[srcName] = [];
       groups[srcName].push(labels[feat] || feat);
     });
@@ -64,6 +69,21 @@ export default function InsightsScreen() {
   const chartData = DataService.getInsightsChartData(timeframe);
   const recommendations = DataService.getRecommendations(directiveCategory);
   const anomalies = DataService.getAnomalies();
+
+  const hasHeartRates = todayHeartRates.length > 0;
+  const hrBpmValues = todayHeartRates.map((p) => p.bpm);
+  const avgHeartRate = hasHeartRates
+    ? `${Math.round(hrBpmValues.reduce((sum, b) => sum + b, 0) / hrBpmValues.length)}`
+    : '--';
+  const minHeartRate = hasHeartRates ? `${Math.min(...hrBpmValues)}` : '--';
+  const maxHeartRate = hasHeartRates ? `${Math.max(...hrBpmValues)}` : '--';
+
+  const realHeartRatePoints = useMemo(() => {
+    return todayHeartRates.map((p) => ({
+      day: new Date(p.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      bpm: p.bpm,
+    }));
+  }, [todayHeartRates]);
 
   const handleRecommendationAction = (rec: AIRecommendation) => {
     Alert.alert(
@@ -155,7 +175,7 @@ export default function InsightsScreen() {
             <View style={styles.badgeGroup}>
               {riskAssessment?.isDemo && (
                 <View style={styles.demoPill}>
-                  <Text style={styles.demoText}>Based partly on demo data</Text>
+                  <Text style={styles.demoText}>Coming soon</Text>
                 </View>
               )}
               <View style={[styles.riskScoreBadge, { backgroundColor: bandColor + '22' }]}>
@@ -303,9 +323,6 @@ export default function InsightsScreen() {
               <MaterialIcons name="show-chart" size={18} color={colors.primary} />
               <Text style={styles.streamSectionTitle}>Health Trends</Text>
             </View>
-            <View style={styles.demoPill}>
-              <Text style={styles.demoText}>Demo data</Text>
-            </View>
           </View>
 
           {/* Heart Rate Trend Chart Card */}
@@ -314,7 +331,7 @@ export default function InsightsScreen() {
               <View>
                 <Text style={styles.chartCardLabel}>Resting Heart Rate</Text>
                 <View style={styles.avgBpmRow}>
-                  <Text style={styles.avgBpmVal}>{chartData.avgBpm}</Text>
+                  <Text style={styles.avgBpmVal}>{avgHeartRate}</Text>
                   <Text style={styles.avgBpmUnit}>BPM avg (60-80 range)</Text>
                 </View>
               </View>
@@ -322,16 +339,24 @@ export default function InsightsScreen() {
               <View style={styles.minMaxRow}>
                 <Text style={styles.minText}>
                   <Text style={{ color: colors.tertiary, fontWeight: '700' }}>MIN </Text>
-                  {chartData.minBpm}
+                  {minHeartRate}
                 </Text>
                 <Text style={styles.maxText}>
                   <Text style={{ color: colors.error, fontWeight: '700' }}>MAX </Text>
-                  {chartData.maxBpm}
+                  {maxHeartRate}
                 </Text>
               </View>
             </View>
 
-            <LineChart points={chartData.heartRatePoints} height={120} />
+            {hasHeartRates ? (
+              <LineChart points={realHeartRatePoints} height={120} />
+            ) : (
+              <View style={styles.emptyChartBox}>
+                <Text style={styles.emptyChartText}>
+                  No heart rate readings recorded today.{'\n'}Sync your watch or log a reading in Digital Twin.
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Stress Levels Chart Card */}
@@ -339,11 +364,17 @@ export default function InsightsScreen() {
             <View style={styles.stressHeader}>
               <Text style={styles.stressTitle}>Stress Levels</Text>
               <View style={styles.demoPill}>
-                <Text style={styles.demoText}>Demo data</Text>
+                <Text style={styles.demoText}>Coming soon</Text>
               </View>
             </View>
 
-            <StressBarChart days={chartData.stressDays} />
+            <View style={styles.emptyStressBox}>
+              <MaterialIcons name="schedule" size={24} color={colors.outline} style={{ marginBottom: 6 }} />
+              <Text style={styles.emptyStressTitle}>Continuous Stress Telemetry</Text>
+              <Text style={styles.emptyStressDesc}>
+                Stress index estimation from continuous heart rate variability is coming soon.
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -355,57 +386,64 @@ export default function InsightsScreen() {
               <Text style={styles.anomaliesTitle}>Unusual Events</Text>
             </View>
             <View style={styles.badgeGroup}>
-              <View style={styles.demoPill}>
-                <Text style={styles.demoText}>Demo data</Text>
-              </View>
               <Text style={styles.anomaliesCount}>{anomalies.length} Events</Text>
             </View>
           </View>
 
-          <View style={styles.anomaliesList}>
-            {anomalies.map((anom) => (
-              <View key={anom.id} style={styles.anomalyItemCard}>
-                <View style={styles.anomalyItemHeader}>
-                  <View style={styles.anomalyTimeGroup}>
-                    <View
-                      style={[
-                        styles.anomalyDot,
-                        {
-                          backgroundColor:
-                            anom.severity === 'amber'
-                              ? '#f59e0b'
-                              : anom.severity === 'rose'
-                              ? colors.error
-                              : colors.secondary,
-                        },
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.anomalyTimeText,
-                        {
-                          color:
-                            anom.severity === 'amber'
-                              ? '#f59e0b'
-                              : anom.severity === 'rose'
-                              ? colors.error
-                              : colors.secondary,
-                        },
-                      ]}
-                    >
-                      {anom.timeStr}
-                    </Text>
+          {anomalies.length === 0 ? (
+            <View style={styles.emptyEventsBox}>
+              <MaterialIcons name="check-circle-outline" size={30} color={colors.tertiary} style={{ marginBottom: 6 }} />
+              <Text style={styles.emptyEventsTitle}>No unusual events detected</Text>
+              <Text style={styles.emptyEventsDesc}>
+                Biometric readings and physiological parameters remain within normal baseline ranges.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.anomaliesList}>
+              {anomalies.map((anom) => (
+                <View key={anom.id} style={styles.anomalyItemCard}>
+                  <View style={styles.anomalyItemHeader}>
+                    <View style={styles.anomalyTimeGroup}>
+                      <View
+                        style={[
+                          styles.anomalyDot,
+                          {
+                            backgroundColor:
+                              anom.severity === 'amber'
+                                ? '#f59e0b'
+                                : anom.severity === 'rose'
+                                ? colors.error
+                                : colors.secondary,
+                          },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.anomalyTimeText,
+                          {
+                            color:
+                              anom.severity === 'amber'
+                                ? '#f59e0b'
+                                : anom.severity === 'rose'
+                                ? colors.error
+                                : colors.secondary,
+                          },
+                        ]}
+                      >
+                        {anom.timeStr}
+                      </Text>
+                    </View>
+
+                    <View style={styles.anomalyTagPill}>
+                      <Text style={styles.anomalyTagText}>{anom.tag}</Text>
+                    </View>
                   </View>
 
-                  <View style={styles.anomalyTagPill}>
-                    <Text style={styles.anomalyTagText}>{anom.tag}</Text>
-                  </View>
+                  <Text style={styles.anomalyDesc}>{anom.description}</Text>
                 </View>
-
-                <Text style={styles.anomalyDesc}>{anom.description}</Text>
-              </View>
-            ))}
-          </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Suggestions Section */}
@@ -417,50 +455,59 @@ export default function InsightsScreen() {
                 Personalized tips based on your recent readings
               </Text>
             </View>
-            <View style={styles.demoPill}>
-              <Text style={styles.demoText}>Demo data</Text>
+          </View>
+
+          {recommendations.length === 0 ? (
+            <View style={styles.emptyEventsBox}>
+              <MaterialIcons name="lightbulb-outline" size={30} color={colors.primary} style={{ marginBottom: 6 }} />
+              <Text style={styles.emptyEventsTitle}>No suggestions yet</Text>
+              <Text style={styles.emptyEventsDesc}>
+                Personalized suggestions will appear as you record steps, sleep, and heart rate readings.
+              </Text>
             </View>
-          </View>
-
-          {/* Filter Pills */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.directiveFiltersRow}
-          >
-            {['all', 'sleep', 'stress', 'activity'].map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={[
-                  styles.filterPill,
-                  directiveCategory === cat ? styles.filterPillActive : styles.filterPillInactive,
-                ]}
-                onPress={() => setDirectiveCategory(cat)}
-                activeOpacity={0.8}
+          ) : (
+            <>
+              {/* Filter Pills */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.directiveFiltersRow}
               >
-                <Text
-                  style={[
-                    styles.filterPillText,
-                    directiveCategory === cat ? styles.filterPillTextActive : null,
-                  ]}
-                >
-                  {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                  {cat === 'all' ? ` (${recommendations.length})` : ''}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+                {['all', 'sleep', 'stress', 'activity'].map((cat) => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[
+                      styles.filterPill,
+                      directiveCategory === cat ? styles.filterPillActive : styles.filterPillInactive,
+                    ]}
+                    onPress={() => setDirectiveCategory(cat)}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.filterPillText,
+                        directiveCategory === cat ? styles.filterPillTextActive : null,
+                      ]}
+                    >
+                      {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                      {cat === 'all' ? ` (${recommendations.length})` : ''}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-          {/* List of Suggestions */}
-          <View style={styles.directivesList}>
-            {recommendations.map((rec) => (
-              <InterventionCard
-                key={rec.id}
-                recommendation={rec}
-                onAction={handleRecommendationAction}
-              />
-            ))}
-          </View>
+              {/* List of Suggestions */}
+              <View style={styles.directivesList}>
+                {recommendations.map((rec) => (
+                  <InterventionCard
+                    key={rec.id}
+                    recommendation={rec}
+                    onAction={handleRecommendationAction}
+                  />
+                ))}
+              </View>
+            </>
+          )}
         </View>
 
         {/* Mandatory Medical Disclaimer */}
@@ -1048,5 +1095,61 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     flex: 1,
+  },
+  emptyChartBox: {
+    height: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  emptyChartText: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  emptyStressBox: {
+    height: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  emptyStressTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  emptyStressDesc: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  emptyEventsBox: {
+    backgroundColor: colors.surfaceContainer,
+    borderRadius: radii.md,
+    padding: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 4,
+    marginTop: 6,
+  },
+  emptyEventsTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  emptyEventsDesc: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
   },
 });
