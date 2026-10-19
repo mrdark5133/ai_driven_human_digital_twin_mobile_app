@@ -23,11 +23,6 @@ import {
   isNotificationAvailable,
 } from '../src/services/callScheduler';
 
-// Module-scope registration of notification listeners (foreground and background responses)
-if (isNotificationAvailable()) {
-  registerNotificationListeners();
-}
-
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -46,7 +41,10 @@ export default function RootLayout() {
     // 2. Schedule daily recurring call triggers
     syncDailyCallSchedule();
 
-    // 3. Reconcile missed calls on app resume
+    // 3. Register foreground & action response listeners
+    const unsubNotifs = registerNotificationListeners();
+
+    // 4. Reconcile missed calls on app resume
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
         reconcile();
@@ -55,6 +53,7 @@ export default function RootLayout() {
 
     return () => {
       subscription.remove();
+      unsubNotifs();
     };
   }, []);
 

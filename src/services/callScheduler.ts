@@ -3,9 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { CALL_SLOTS, CallSlotId, MORNING_SLOT, EVENING_SLOT } from '../config/callSchedule';
 import { saveCallEntry, updateCallEntry } from './callHistory';
-import { ASSISTANT_NAME } from '../config/appConfig';
 
 const SETTINGS_KEY = '@ai_twin_call_schedule_settings';
+const MIGRATION_KEY = '@pallavi_call_v2_migrated';
 
 export interface ScheduleSettings {
   morningEnabled: boolean;
@@ -22,7 +22,7 @@ let moduleChecked = false;
 
 /**
  * Checks whether native notification capabilities are present in the current build.
- * Safely guards against native crashes on older APK builds.
+ * Safely guards against native crashes on Expo Go or older APK builds.
  */
 export function isNotificationAvailable(): boolean {
   if (moduleChecked) return notificationsModule !== null;
@@ -41,13 +41,16 @@ export function isNotificationAvailable(): boolean {
         AndroidImportance: mod.AndroidImportance || mod.default?.AndroidImportance || {
           MAX: 5,
         },
+        AndroidNotificationPriority: mod.AndroidNotificationPriority || mod.default?.AndroidNotificationPriority || {
+          MAX: 'max',
+        },
         AndroidNotificationVisibility: mod.AndroidNotificationVisibility || mod.default?.AndroidNotificationVisibility || {
           PUBLIC: 1,
         },
       };
     }
   } catch (err) {
-    console.log('[CallScheduler] expo-notifications not available on this APK build:', err);
+    console.log('[CallScheduler] expo-notifications not available on this environment (e.g. Expo Go):', err);
     notificationsModule = null;
   }
 
@@ -90,37 +93,39 @@ export async function saveScheduleSettings(settings: ScheduleSettings): Promise<
 }
 
 /**
- * Sets up notification channel and interactive action categories.
+ * Sets up the new "pallavi_call_v2" notification channel and interactive action categories.
  */
 export async function setupNotificationChannels(): Promise<void> {
   const Notifications = getNotifications();
   if (!Notifications) return;
 
   try {
-    // 1. Android High-Importance Call Channel
+    // 1. Android High-Importance Call Channel (pallavi_call_v2)
     if (Platform.OS === 'android') {
+      // Clean up deprecated channels if supported
       try {
         if (Notifications.deleteNotificationChannelAsync) {
           await Notifications.deleteNotificationChannelAsync('aura-calls');
+          await Notifications.deleteNotificationChannelAsync('aura-calls-v2');
         }
-      } catch (delErr) {
-        // Channel might not exist or error deleting legacy channel
+      } catch {
+        // Channel might not exist
       }
 
-      await Notifications.setNotificationChannelAsync('aura-calls-v2', {
-        name: `${ASSISTANT_NAME} Calls`,
-        description: `Scheduled incoming check-in calls from ${ASSISTANT_NAME}`,
+      await Notifications.setNotificationChannelAsync('pallavi_call_v2', {
+        name: 'Pallavi Calls',
+        description: 'Scheduled incoming calls and ringing from Pallavi',
         importance: Notifications.AndroidImportance?.MAX ?? 5,
-        vibrationPattern: [0, 600, 300, 600, 300, 600],
-        lightColor: '#4cd7f6',
+        sound: 'pallavi_ring.wav',
+        vibrationPattern: [0, 800, 400, 800, 400, 800],
         lockscreenVisibility: Notifications.AndroidNotificationVisibility?.PUBLIC ?? 1,
-        bypassDnd: true,
+        bypassDnd: false,
         enableVibrate: true,
       });
     }
 
-    // 2. Interactive Call Actions: Answer and Decline
-    await Notifications.setNotificationCategoryAsync('aura-call-actions', [
+    // 2. Interactive Call Actions: Answer and Decline (category "incoming_call")
+    await Notifications.setNotificationCategoryAsync('incoming_call', [
       {
         identifier: 'ANSWER',
         buttonTitle: 'Answer',
@@ -133,12 +138,28 @@ export async function setupNotificationChannels(): Promise<void> {
         buttonTitle: 'Decline',
         options: {
           isDestructive: true,
-          opensAppToForeground: false,
+          opensAppToForeground: true,
         },
       },
     ]);
 
-    // 3. Set foreground presentation options
+    // Backward compatibility for legacy category
+    try {
+      await Notifications.setNotificationCategoryAsync('aura-call-actions', [
+        {
+          identifier: 'ANSWER',
+          buttonTitle: 'Answer',
+          options: { opensAppToForeground: true },
+        },
+        {
+          identifier: 'DECLINE',
+          buttonTitle: 'Decline',
+          options: { isDestructive: true, opensAppToForeground: true },
+        },
+      ]);
+    } catch {}
+
+    // 3. Foreground presentation options: show alert and play sound
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: true,
@@ -152,7 +173,7 @@ export async function setupNotificationChannels(): Promise<void> {
 }
 
 /**
- * Requests notification and exact alarm permissions.
+ * Requests notification and exact alarm permissions at runtime.
  */
 export async function requestCallPermissions(): Promise<boolean> {
   const Notifications = getNotifications();
@@ -163,7 +184,13 @@ export async function requestCallPermissions(): Promise<boolean> {
     let finalStatus = existingStatus;
 
     if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
+      const { status } = await Notifications.requestPermissionsAsync({
+        ios: {
+          allowAlert: true,
+          allowBadge: true,
+          allowSound: true,
+        },
+      });
       finalStatus = status;
     }
 
@@ -175,7 +202,7 @@ export async function requestCallPermissions(): Promise<boolean> {
 }
 
 /**
- * Checks current notification permission status.
+ * Checks current notification permission and exact alarm status.
  */
 export async function checkCallPermissions(): Promise<boolean> {
   const Notifications = getNotifications();
@@ -190,7 +217,30 @@ export async function checkCallPermissions(): Promise<boolean> {
 }
 
 /**
- * Guides user to battery optimization settings on Android.
+ * Detailed permission and exact alarm check for profile reliability warnings.
+ */
+export async function checkReliabilityPermissions(): Promise<{
+  notificationsGranted: boolean;
+  canScheduleExactAlarms: boolean;
+}> {
+  const Notifications = getNotifications();
+  if (!Notifications) {
+    return { notificationsGranted: false, canScheduleExactAlarms: false };
+  }
+
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    return {
+      notificationsGranted: perm.status === 'granted',
+      canScheduleExactAlarms: perm.canScheduleExactAlarms ?? true,
+    };
+  } catch {
+    return { notificationsGranted: false, canScheduleExactAlarms: false };
+  }
+}
+
+/**
+ * Guides user to battery optimization / app settings on Android.
  */
 export async function openBatteryOptimizationSettings(): Promise<void> {
   if (Platform.OS === 'android') {
@@ -206,7 +256,7 @@ export async function openBatteryOptimizationSettings(): Promise<void> {
 }
 
 /**
- * Cancels all currently scheduled AURA call notifications.
+ * Cancels all currently scheduled call notifications.
  */
 export async function cancelAllScheduledCalls(): Promise<void> {
   const Notifications = getNotifications();
@@ -215,7 +265,8 @@ export async function cancelAllScheduledCalls(): Promise<void> {
   try {
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
     for (const notif of scheduled) {
-      if (notif.content.data?.type === 'scheduled_call') {
+      const type = notif.content?.data?.type;
+      if (type === 'incoming_call' || type === 'scheduled_call') {
         await Notifications.cancelScheduledNotificationAsync(notif.identifier);
       }
     }
@@ -225,12 +276,14 @@ export async function cancelAllScheduledCalls(): Promise<void> {
 }
 
 /**
- * Idempotently syncs and schedules the daily repeating triggers for enabled slots.
- * Cancels previous schedules and recreates them on app start.
+ * Idempotently syncs and schedules the daily repeating triggers for enabled slots on pallavi_call_v2 channel.
+ * Cancels previous schedules and recreates them cleanly.
  */
 export async function syncDailyCallSchedule(): Promise<void> {
   const Notifications = getNotifications();
   if (!Notifications) return;
+
+  await setupNotificationChannels();
 
   const hasPerm = await checkCallPermissions();
   if (!hasPerm) return;
@@ -244,77 +297,114 @@ export async function syncDailyCallSchedule(): Promise<void> {
 
   for (const slot of slotsToSchedule) {
     try {
+      const slotIdentifier: 'morning' | 'night' = slot.id === 'morning' ? 'morning' : 'night';
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: ASSISTANT_NAME,
-          body: slot.label,
-          categoryIdentifier: 'aura-call-actions',
-          data: {
-            type: 'scheduled_call',
-            slot: slot.id,
-          },
+          title: 'Pallavi is calling',
+          body: 'Tap to answer',
+          priority: Notifications.AndroidNotificationPriority?.MAX ?? 'max',
+          categoryIdentifier: 'incoming_call',
+          sound: 'pallavi_ring.wav',
           sticky: true,
           autoDismiss: false,
           color: '#4cd7f6',
+          data: {
+            type: 'incoming_call',
+            slot: slotIdentifier,
+          },
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           hour: slot.hour,
           minute: slot.minute,
-          channelId: 'aura-calls-v2',
+          channelId: 'pallavi_call_v2',
         },
       });
-      console.log(`[CallScheduler] Scheduled daily ${slot.id} call at ${slot.hour}:${slot.minute}`);
+      console.log(`[CallScheduler] Scheduled daily ${slotIdentifier} call on pallavi_call_v2 at ${slot.hour}:${slot.minute}`);
     } catch (err) {
       console.warn(`[CallScheduler] Failed to schedule ${slot.id}:`, err);
     }
   }
+
+  try {
+    await AsyncStorage.setItem(MIGRATION_KEY, 'true');
+  } catch {}
 }
 
 /**
- * Triggers a test call in specified seconds for testing and demonstration.
+ * Triggers a test ring in specified seconds (defaults to 5 seconds).
+ * Works in Expo Go (falls back safely to in-app timer) and in native builds.
  */
-export async function testCallIn(seconds: number = 10): Promise<string> {
-  const Notifications = getNotifications();
-  if (!Notifications) {
-    throw new Error('Notifications are not available on this build.');
-  }
-
-  await setupNotificationChannels();
-  const hasPerm = await requestCallPermissions();
-  if (!hasPerm) {
-    throw new Error('Notification permissions not granted.');
-  }
-
-  const slot: CallSlotId = new Date().getHours() < 12 ? 'morning' : 'evening';
+export async function testCallIn(seconds: number = 5): Promise<string> {
   const historyId = `call-test-${Date.now()}`;
+  const now = new Date();
+  const slot: CallSlotId = now.getHours() < 12 ? 'morning' : 'evening';
+  const slotIdentifier: 'morning' | 'night' = slot === 'morning' ? 'morning' : 'night';
 
-  // Pre-create entry as scheduled
+  // Pre-create entry in call history
   await saveCallEntry({
     id: historyId,
     slot,
     scheduledAt: Date.now() + seconds * 1000,
-    status: 'missed', // will become answered or declined if handled
+    status: 'missed',
   });
+
+  const Notifications = getNotifications();
+
+  // If notifications are unavailable (e.g. Expo Go) or permission denied, fallback to JS timeout
+  if (!Notifications) {
+    console.log(`[CallScheduler] Notifications unavailable. Setting in-app ring timer in ${seconds}s`);
+    setTimeout(() => {
+      router.push({
+        pathname: '/call',
+        params: {
+          mode: 'incoming',
+          slot,
+          historyId,
+        },
+      });
+    }, seconds * 1000);
+    return 'expo-go-test';
+  }
+
+  await setupNotificationChannels();
+  const hasPerm = await requestCallPermissions();
+
+  if (!hasPerm) {
+    // If permission was denied, still allow in-app test ring
+    setTimeout(() => {
+      router.push({
+        pathname: '/call',
+        params: {
+          mode: 'incoming',
+          slot,
+          historyId,
+        },
+      });
+    }, seconds * 1000);
+    return 'permission-fallback-test';
+  }
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
-      title: ASSISTANT_NAME,
-      body: slot === 'morning' ? 'Morning check-in' : 'Evening check-in',
-      categoryIdentifier: 'aura-call-actions',
-      data: {
-        type: 'scheduled_call',
-        slot,
-        historyId,
-      },
+      title: 'Pallavi is calling',
+      body: 'Tap to answer',
+      priority: Notifications.AndroidNotificationPriority?.MAX ?? 'max',
+      categoryIdentifier: 'incoming_call',
+      sound: 'pallavi_ring.wav',
       sticky: true,
       autoDismiss: false,
       color: '#4cd7f6',
+      data: {
+        type: 'incoming_call',
+        slot: slotIdentifier,
+        historyId,
+      },
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
       seconds: Math.max(1, seconds),
-      channelId: 'aura-calls-v2',
+      channelId: 'pallavi_call_v2',
     },
   });
 
@@ -326,38 +416,32 @@ export async function testCallIn(seconds: number = 10): Promise<string> {
  */
 export async function handleNotificationResponse(response: any): Promise<void> {
   const data = response?.notification?.request?.content?.data;
-  if (data?.type !== 'scheduled_call') return;
+  if (data?.type !== 'incoming_call' && data?.type !== 'scheduled_call') return;
 
-  const slot: CallSlotId = data.slot || 'morning';
+  const rawSlot = data.slot;
+  const slot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
   const historyId: string = data.historyId || `call-${slot}-${Date.now()}`;
   const actionId = response.actionIdentifier;
 
   const Notifications = getNotifications();
+  if (Notifications?.dismissNotificationAsync) {
+    try {
+      await Notifications.dismissNotificationAsync(response.notification.request.identifier);
+    } catch {}
+  }
 
   if (actionId === 'DECLINE') {
-    // User pressed Decline action
-    await updateCallEntry(historyId, { status: 'declined' });
-    if (Notifications) {
-      await Notifications.dismissNotificationAsync(response.notification.request.identifier);
-    }
-  } else if (actionId === 'ANSWER') {
-    // User pressed Answer action -> Go straight to active call
-    await updateCallEntry(historyId, {
-      status: 'answered',
-      answeredAt: Date.now(),
-    });
-    if (Notifications) {
-      await Notifications.dismissNotificationAsync(response.notification.request.identifier);
-    }
+    // User pressed Decline action -> mark as missed per instruction
+    await updateCallEntry(historyId, { status: 'missed' });
+  } else {
+    // User pressed Answer action or tapped notification body -> show incoming call screen
     router.push({
       pathname: '/call',
-      params: { slot, historyId },
-    });
-  } else {
-    // User pressed notification body / full-screen intent -> Show incoming-call screen
-    router.push({
-      pathname: '/incoming-call',
-      params: { slot, historyId },
+      params: {
+        mode: 'incoming',
+        slot,
+        historyId,
+      },
     });
   }
 }
@@ -372,15 +456,21 @@ export function registerNotificationListeners(): () => void {
 
   setupNotificationChannels();
 
-  // Foreground notification received: if app is already open, show incoming-call screen directly
+  // Foreground notification received: trigger in-app ringing screen when app is open
   const subReceived = Notifications.addNotificationReceivedListener((notification: any) => {
     const data = notification?.request?.content?.data;
-    if (data?.type === 'scheduled_call') {
-      const slot: CallSlotId = data.slot || 'morning';
+    if (data?.type === 'incoming_call' || data?.type === 'scheduled_call') {
+      const rawSlot = data.slot;
+      const slot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
       const historyId: string = data.historyId || `call-${slot}-${Date.now()}`;
+
       router.push({
-        pathname: '/incoming-call',
-        params: { slot, historyId },
+        pathname: '/call',
+        params: {
+          mode: 'incoming',
+          slot,
+          historyId,
+        },
       });
     }
   });

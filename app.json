@@ -46,7 +46,10 @@
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#4cd7f6"
+          "color": "#4cd7f6",
+          "sounds": [
+            "./assets/sounds/pallavi_ring.wav"
+          ]
         }
       ],
       "./plugins/withAuraCallConfig.js",
@@ -71,7 +74,8 @@
           ]
         }
       ],
-      "llama.rn"
+      "llama.rn",
+      "expo-audio"
     ],
     "extra": {
       "router": {},

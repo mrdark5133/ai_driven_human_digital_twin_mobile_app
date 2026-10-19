@@ -37,10 +37,20 @@ import {
   playVoiceSample,
 } from '../src/services/voice/tts';
 import type { Voice } from 'expo-speech';
+import { startRingtone, stopRingtone } from '../src/services/ringtonePlayer';
+import { updateCallEntry, saveCallEntry } from '../src/services/callHistory';
 
 export default function CallScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ slot?: CallSlotId; historyId?: string }>();
+  const params = useLocalSearchParams<{
+    slot?: CallSlotId | 'night';
+    historyId?: string;
+    mode?: 'incoming' | 'active';
+  }>();
+
+  const [callMode, setCallMode] = useState<'incoming' | 'active'>(
+    params.mode === 'incoming' ? 'incoming' : 'active'
+  );
 
   // Model download state
   const [modelReady, setModelReady] = useState<boolean | null>(null);
@@ -100,6 +110,93 @@ export default function CallScreen() {
   const micAnim = useRef(new Animated.Value(1)).current;
   const speakingPulse = useRef(new Animated.Value(1)).current;
 
+  // Incoming call pulsing rings animation
+  const incomingPulse1 = useRef(new Animated.Value(1)).current;
+  const incomingPulse2 = useRef(new Animated.Value(1)).current;
+  const incomingPulse3 = useRef(new Animated.Value(1)).current;
+
+  // Incoming ringing & 45-second timeout effect
+  useEffect(() => {
+    if (callMode !== 'incoming') return;
+
+    startRingtone();
+
+    const createPulse = (anim: Animated.Value, delay: number) => {
+      return Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, {
+            toValue: 1.45,
+            duration: 1800,
+            easing: Easing.out(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 1.0,
+            duration: 0,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+    };
+
+    const loop1 = createPulse(incomingPulse1, 0);
+    const loop2 = createPulse(incomingPulse2, 400);
+    const loop3 = createPulse(incomingPulse3, 800);
+    loop1.start();
+    loop2.start();
+    loop3.start();
+
+    const rawSlot = params.slot;
+    const normalizedSlot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
+    const historyId = params.historyId || `call-${normalizedSlot}-${Date.now()}`;
+
+    const timeout = setTimeout(async () => {
+      stopRingtone();
+      await updateCallEntry(historyId, { status: 'missed' });
+      router.back();
+    }, 45000);
+
+    return () => {
+      stopRingtone();
+      clearTimeout(timeout);
+      loop1.stop();
+      loop2.stop();
+      loop3.stop();
+    };
+  }, [callMode, params.slot, params.historyId]);
+
+  const handleAcceptIncoming = async () => {
+    stopRingtone();
+    const rawSlot = params.slot;
+    const normalizedSlot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
+    const historyId = params.historyId || `call-${normalizedSlot}-${Date.now()}`;
+
+    await saveCallEntry({
+      id: historyId,
+      slot: normalizedSlot,
+      scheduledAt: Date.now(),
+      status: 'answered',
+      answeredAt: Date.now(),
+    });
+
+    warmupLlmContext({ slot: normalizedSlot }).catch((err) => {
+      console.warn('[CallScreen] Warm-up error (non-critical):', err);
+    });
+
+    setCallMode('active');
+  };
+
+  const handleDeclineIncoming = async () => {
+    stopRingtone();
+    const rawSlot = params.slot;
+    const normalizedSlot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
+    const historyId = params.historyId || `call-${normalizedSlot}-${Date.now()}`;
+
+    await updateCallEntry(historyId, { status: 'missed' });
+    router.back();
+  };
+
   // 1. Check offline language pack availability
   useEffect(() => {
     let active = true;
@@ -113,6 +210,8 @@ export default function CallScreen() {
 
   // 2. Initial check for model file, background LLM warm-up & start call
   useEffect(() => {
+    if (callMode === 'incoming') return;
+
     let mounted = true;
 
     // Reset locale to en-IN for call
@@ -124,13 +223,15 @@ export default function CallScreen() {
       if (mounted) {
         setModelReady(ready);
         if (ready) {
+          const rawSlot = params.slot;
+          const normalizedSlot: CallSlotId = rawSlot === 'night' ? 'evening' : (rawSlot || 'morning');
           // Warm up LLM context with real prefix for this specific slot
-          warmupLlmContext({ slot: params.slot }).catch((err) => {
+          warmupLlmContext({ slot: normalizedSlot }).catch((err) => {
             console.warn('[CallScreen] Warm-up error (non-critical):', err);
           });
 
           await callAgent.startCall({
-            slot: params.slot,
+            slot: normalizedSlot,
             historyId: params.historyId,
           });
         }
@@ -149,12 +250,12 @@ export default function CallScreen() {
       callAgent.endCall();
       cancelModelDownload();
     };
-  }, [params.slot, params.historyId]);
+  }, [callMode, params.slot, params.historyId]);
 
   // 3. Call seconds elapsed timer
   useEffect(() => {
     let timer: any = null;
-    if (modelReady && agentEvent.state !== 'error') {
+    if (callMode === 'active' && modelReady && agentEvent.state !== 'error') {
       timer = setInterval(() => {
         setCallSeconds((s) => s + 1);
       }, 1000);
@@ -162,7 +263,7 @@ export default function CallScreen() {
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [modelReady, agentEvent.state]);
+  }, [callMode, modelReady, agentEvent.state]);
 
   // 4. Live Mic volume reactive wave scaling
   useEffect(() => {
@@ -294,8 +395,9 @@ export default function CallScreen() {
       setModelReady(true);
       setIsDownloading(false);
       warmupLlmContext().catch(() => {});
+      const normalizedSlot: CallSlotId = params.slot === 'night' ? 'evening' : (params.slot || 'morning');
       await callAgent.startCall({
-        slot: params.slot,
+        slot: normalizedSlot,
         historyId: params.historyId,
       });
     } catch (err: any) {
@@ -356,6 +458,102 @@ export default function CallScreen() {
       });
     }
   }, [showDebugModal]);
+
+  if (callMode === 'incoming') {
+    const rawSlot = params.slot;
+    const isMorning = rawSlot === 'morning' || (!rawSlot && new Date().getHours() < 12);
+    const slotLabel = isMorning ? 'Morning check-in' : 'Evening check-in';
+
+    return (
+      <SafeAreaView style={styles.incomingContainer} edges={['top', 'bottom']}>
+        {/* Top Caller Information */}
+        <View style={styles.incomingTopSection}>
+          <View style={styles.incomingBadge}>
+            <MaterialIcons name="schedule" size={14} color={colors.primary} />
+            <Text style={styles.incomingBadgeText}>{slotLabel.toUpperCase()}</Text>
+          </View>
+
+          <Text style={styles.incomingCallerName}>Pallavi</Text>
+          <Text style={styles.incomingCallingStatusText}>Pallavi is calling...</Text>
+        </View>
+
+        {/* Central Pulsing Caller Orb */}
+        <View style={styles.incomingOrbContainer}>
+          <Animated.View
+            style={[
+              styles.incomingAnimatedRing,
+              {
+                transform: [{ scale: incomingPulse1 }],
+                opacity: incomingPulse1.interpolate({
+                  inputRange: [1, 1.45],
+                  outputRange: [0.6, 0],
+                }),
+              },
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.incomingAnimatedRing,
+              {
+                transform: [{ scale: incomingPulse2 }],
+                opacity: incomingPulse2.interpolate({
+                  inputRange: [1, 1.45],
+                  outputRange: [0.5, 0],
+                }),
+              },
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.incomingAnimatedRing,
+              {
+                transform: [{ scale: incomingPulse3 }],
+                opacity: incomingPulse3.interpolate({
+                  inputRange: [1, 1.45],
+                  outputRange: [0.4, 0],
+                }),
+              },
+            ]}
+          />
+
+          <View style={styles.incomingOrbCore}>
+            <Text style={styles.incomingAvatarLetter}>P</Text>
+          </View>
+        </View>
+
+        {/* Bottom Accept / Decline Buttons */}
+        <View style={styles.incomingBottomSection}>
+          <View style={styles.incomingActionButtonsRow}>
+            {/* Decline Button */}
+            <View style={styles.incomingActionCol}>
+              <TouchableOpacity
+                style={styles.incomingDeclineBtn}
+                onPress={handleDeclineIncoming}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="call-end" size={32} color="#ffffff" />
+              </TouchableOpacity>
+              <Text style={styles.incomingActionLabel}>Decline</Text>
+            </View>
+
+            {/* Accept Button */}
+            <View style={styles.incomingActionCol}>
+              <TouchableOpacity
+                style={styles.incomingAcceptBtn}
+                onPress={handleAcceptIncoming}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="call" size={32} color="#ffffff" />
+              </TouchableOpacity>
+              <Text style={styles.incomingActionLabel}>Accept</Text>
+            </View>
+          </View>
+
+          <Text style={styles.incomingTimeoutHint}>Auto-closes in 45s if unanswered</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -1680,5 +1878,138 @@ const styles = StyleSheet.create({
     backgroundColor: '#EF4444',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  incomingContainer: {
+    flex: 1,
+    backgroundColor: '#070e1c',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.xl,
+  },
+  incomingTopSection: {
+    alignItems: 'center',
+    paddingTop: space.lg,
+  },
+  incomingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(76, 215, 246, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(76, 215, 246, 0.3)',
+    marginBottom: space.md,
+  },
+  incomingBadgeText: {
+    ...type.labelSm,
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  incomingCallerName: {
+    ...type.headline,
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 36,
+    letterSpacing: 1.5,
+    marginBottom: space.xs,
+  },
+  incomingCallingStatusText: {
+    ...type.title,
+    color: colors.textDim,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  incomingOrbContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 260,
+    position: 'relative',
+  },
+  incomingAnimatedRing: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(76, 215, 246, 0.06)',
+  },
+  incomingOrbCore: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    borderWidth: 2.5,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  incomingAvatarLetter: {
+    ...type.headline,
+    color: colors.primary,
+    fontWeight: '800',
+    fontSize: 48,
+  },
+  incomingBottomSection: {
+    alignItems: 'center',
+    gap: space.md,
+    paddingBottom: space.md,
+  },
+  incomingActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    width: '100%',
+    paddingHorizontal: space.lg,
+  },
+  incomingActionCol: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  incomingDeclineBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  incomingAcceptBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  incomingActionLabel: {
+    ...type.bodySm,
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  incomingTimeoutHint: {
+    ...type.bodySm,
+    color: colors.outline,
+    fontSize: 11,
   },
 });

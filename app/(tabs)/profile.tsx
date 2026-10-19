@@ -8,6 +8,7 @@ import {
   Switch,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -18,6 +19,7 @@ import { DataService } from '../../services/dataService';
 import { UserProfile, TelemetrySettings, WatchDevice } from '../../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isHealthConnectAvailable } from '../../src/services/healthConnect';
+import { checkReliabilityPermissions, testCallIn } from '../../src/services/callScheduler';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -25,7 +27,24 @@ export default function ProfileScreen() {
   const [watch, setWatch] = useState<WatchDevice>(DataService.getWatch());
   const [settings, setSettings] = useState<TelemetrySettings>(DataService.getSettings());
   const [isSyncing, setIsSyncing] = useState(false);
+  const [reliabilityBlocked, setReliabilityBlocked] = useState(false);
+  const [reliabilityWarningDismissed, setReliabilityWarningDismissed] = useState(false);
+  const [isTestingRing, setIsTestingRing] = useState(false);
   const isHcAvailable = isHealthConnectAvailable();
+
+  useEffect(() => {
+    AsyncStorage.getItem('@pallavi_reliability_warning_dismissed').then((val) => {
+      if (val === 'true') {
+        setReliabilityWarningDismissed(true);
+      }
+    });
+
+    checkReliabilityPermissions().then((status) => {
+      if (!status.notificationsGranted || !status.canScheduleExactAlarms) {
+        setReliabilityBlocked(true);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     // Check for stored smoking status on mount
@@ -67,6 +86,30 @@ export default function ProfileScreen() {
       }
     } catch (err) {
       console.warn('[Profile] Failed to save smoking status:', err);
+    }
+  };
+
+  const handleDismissReliabilityWarning = async () => {
+    setReliabilityWarningDismissed(true);
+    try {
+      await AsyncStorage.setItem('@pallavi_reliability_warning_dismissed', 'true');
+    } catch (err) {
+      console.warn('[Profile] Failed to save dismissed state:', err);
+    }
+  };
+
+  const handleTestRing = async () => {
+    setIsTestingRing(true);
+    try {
+      await testCallIn(5);
+      Alert.alert(
+        'Test Ring Scheduled',
+        'Pallavi will ring in 5 seconds. You can stay in the app or lock your phone to test the ringing.'
+      );
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Could not schedule test ring.');
+    } finally {
+      setTimeout(() => setIsTestingRing(false), 5000);
     }
   };
 
@@ -321,6 +364,88 @@ export default function ProfileScreen() {
                 {isHcAvailable ? 'Available' : 'Not installed'}
               </Text>
             </View>
+          </View>
+        </View>
+
+        {/* Section: Pallavi Scheduled Calls */}
+        <View style={styles.sectionBlock}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionTitleGroup}>
+              <MaterialIcons name="phone-in-talk" size={18} color={colors.secondary} />
+              <Text style={styles.sectionHeaderTitle}>Pallavi Check-in Calls</Text>
+            </View>
+            <Text style={styles.devicesOnlineText}>Daily 8:45 AM & 9:00 PM</Text>
+          </View>
+
+          {/* Reliability warning banner if exact alarms or notifications are blocked */}
+          {reliabilityBlocked && !reliabilityWarningDismissed && (
+            <View style={styles.warningBanner}>
+              <View style={styles.warningBannerTop}>
+                <MaterialIcons name="warning-amber" size={20} color="#F59E0B" />
+                <Text style={styles.warningBannerTitle}>Call Ringing Notice</Text>
+              </View>
+              <Text style={styles.warningBannerBody}>
+                For Pallavi to ring on time, allow notifications and turn off battery optimization for this app
+              </Text>
+              <View style={styles.warningBannerActions}>
+                <TouchableOpacity
+                  style={styles.warningBannerBtn}
+                  onPress={() => Linking.openSettings()}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="settings" size={15} color="#070e1c" />
+                  <Text style={styles.warningBannerBtnText}>Open Settings</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.warningBannerDismissBtn}
+                  onPress={handleDismissReliabilityWarning}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.warningBannerDismissText}>Dismiss</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          <View style={styles.cardBox}>
+            {/* Scheduled slots info */}
+            <View style={styles.prefRow}>
+              <View style={styles.prefLeft}>
+                <View style={styles.prefIcon}>
+                  <MaterialIcons name="notifications-active" size={18} color={colors.primary} />
+                </View>
+                <View>
+                  <Text style={styles.prefTitle}>Scheduled Calls</Text>
+                  <Text style={styles.prefSub}>Morning 8:45 AM • Night 9:00 PM</Text>
+                </View>
+              </View>
+              <View style={styles.prefPill}>
+                <Text style={styles.prefPillText}>Active</Text>
+              </View>
+            </View>
+
+            {/* Test ring now button */}
+            <TouchableOpacity
+              style={styles.dossierBtn}
+              onPress={handleTestRing}
+              disabled={isTestingRing}
+              activeOpacity={0.8}
+            >
+              <View style={styles.dossierLeft}>
+                <MaterialIcons name="ring-volume" size={20} color={colors.primary} />
+                <View>
+                  <Text style={styles.dossierTitle}>Test ring now</Text>
+                  <Text style={styles.dossierSub}>
+                    {isTestingRing ? 'Ringing in 5 seconds...' : 'Triggers incoming call in 5 seconds'}
+                  </Text>
+                </View>
+              </View>
+              {isTestingRing ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <MaterialIcons name="play-arrow" size={20} color={colors.primary} />
+              )}
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -1061,5 +1186,60 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     fontSize: 11,
     opacity: 0.7,
+  },
+  warningBanner: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    borderRadius: radii.lg,
+    padding: spacing.spaceMd,
+    gap: 8,
+  },
+  warningBannerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  warningBannerTitle: {
+    ...typography.bodySm,
+    color: '#F59E0B',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  warningBannerBody: {
+    ...typography.bodySm,
+    color: colors.onSurface,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  warningBannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 4,
+  },
+  warningBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.full,
+  },
+  warningBannerBtnText: {
+    ...typography.bodySm,
+    color: '#070e1c',
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  warningBannerDismissBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  warningBannerDismissText: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
   },
 });
