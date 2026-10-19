@@ -15,6 +15,15 @@ import {
   HeartRateDataPoint,
 } from '../../src/services/healthConnect';
 import { ASSISTANT_NAME } from '../../src/config/appConfig';
+import { computeRealDeviceRisks } from '../../src/services/riskDataService';
+import { RiskCategoryResult } from '../../src/services/riskEngine';
+
+const DEFAULT_CHIP_CATEGORIES: RiskCategoryResult[] = [
+  { category: 'Cardiovascular', level: 'Unknown', confidence: 'partial', color: '#9CA3AF', explanation: '', drivers: [], missing: [], displayText: 'Need data', score: 0.15 },
+  { category: 'Metabolic', level: 'Unknown', confidence: 'partial', color: '#9CA3AF', explanation: '', drivers: [], missing: [], displayText: 'Need data', score: 0.18 },
+  { category: 'Respiratory', level: 'Unknown', confidence: 'partial', color: '#9CA3AF', explanation: '', drivers: [], missing: [], displayText: 'Need data', score: 0.12 },
+  { category: 'Lifestyle', level: 'Unknown', confidence: 'partial', color: '#9CA3AF', explanation: '', drivers: [], missing: [], displayText: 'Need data', score: 0.15 },
+];
 
 function Tag({ text, color }: { text: string; color: string }) {
   return (
@@ -107,18 +116,31 @@ export default function Home() {
   const [riskBand, setRiskBand] = useState<RiskBand>('Low');
   const [refreshing, setRefreshing] = useState(false);
 
+  // Real on-device risk engine state
+  const [riskResults, setRiskResults] = useState<RiskCategoryResult[]>([]);
+  const [hasComputedRisk, setHasComputedRisk] = useState(false);
+  const [highestRiskLevel, setHighestRiskLevel] = useState<'Low' | 'Moderate' | 'Elevated' | null>(null);
+  const [highestRiskColor, setHighestRiskColor] = useState<string>('#9CA3AF');
+
   const loadData = useCallback(async () => {
     try {
-      const [vitalsRes, stepsRes, hrHistoryRes, riskRes] = await Promise.all([
+      const [vitalsRes, stepsRes, hrHistoryRes, riskRes, realRiskRes] = await Promise.all([
         getCurrentVitals(),
         getTodaySteps(),
         getTodayHeartRates(),
         getRiskAssessment().catch(() => null),
+        computeRealDeviceRisks().catch(() => null),
       ]);
       setVitals(vitalsRes);
       setStepsData(stepsRes);
       setTodayHeartRates(hrHistoryRes);
       if (riskRes) setRiskBand(riskRes.band);
+      if (realRiskRes) {
+        setRiskResults(realRiskRes.results);
+        setHasComputedRisk(realRiskRes.hasAnyComputedRisk);
+        setHighestRiskLevel(realRiskRes.highestRiskLevel);
+        setHighestRiskColor(realRiskRes.highestRiskColor);
+      }
     } catch (err) {
       console.warn('[HomeScreen] Failed to fetch real data:', err);
     } finally {
@@ -238,25 +260,36 @@ export default function Home() {
                 <View style={s.pillDot} />
                 <Text style={[s.label, { color: colors.primary }]}>Baseline reference</Text>
               </View>
-              <Pressable
-                onPress={() => router.push('/(tabs)/insights')}
-                style={s.riskPill}
-              >
-                <View
-                  style={[
-                    s.pillDot,
-                    {
-                      backgroundColor:
-                        riskBand === 'High'
-                          ? colors.red
-                          : riskBand === 'Moderate'
-                          ? colors.amber
-                          : colors.green,
-                    },
-                  ]}
-                />
-                <Text style={s.riskPillText}>Risk: {riskBand}</Text>
-              </Pressable>
+              {hasComputedRisk && highestRiskLevel ? (
+                (() => {
+                  const isTopPartialLow =
+                    highestRiskLevel === 'Low' &&
+                    riskResults.some((r) => r.level === 'Low' && r.confidence === 'partial') &&
+                    !riskResults.some((r) => r.level === 'Low' && r.confidence === 'full');
+                  const pillColor = isTopPartialLow ? '#9CA3AF' : highestRiskColor;
+                  const labelText = isTopPartialLow ? 'Risk: Low (limited data)' : `Risk: ${highestRiskLevel}`;
+
+                  return (
+                    <Pressable
+                      onPress={() => router.push('/risk-details')}
+                      style={[
+                        s.riskPill,
+                        isTopPartialLow ? { borderColor: '#9CA3AF' } : null,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          s.pillDot,
+                          {
+                            backgroundColor: pillColor,
+                          },
+                        ]}
+                      />
+                      <Text style={[s.riskPillText, { color: pillColor }]}>{labelText}</Text>
+                    </Pressable>
+                  );
+                })()
+              ) : null}
             </View>
           </View>
           <ScoreRing score={78} />
@@ -407,6 +440,80 @@ export default function Home() {
             </Text>
           </View>
         </View>
+
+        {/* Risk Predict Card */}
+        <Pressable
+          onPress={() => router.push('/risk-details')}
+          style={s.card}
+          android_ripple={{ color: colors.cardHigh }}
+        >
+          <View style={s.cardHead}>
+            <View style={s.row}>
+              <Icon name="shield-alert-outline" size={18} color={colors.primary} />
+              <Text style={s.cardLabel}>Risk Predict</Text>
+            </View>
+            <Tag text="Rule-based" color={colors.primary} />
+          </View>
+
+          <Text style={[s.bodySm, { marginBottom: space.xs }]}>
+            On-device triage from phone steps, vitals, profile & transcripts.
+          </Text>
+
+          {/* Row of 4 chips */}
+          <View style={s.chipsRow}>
+            {(riskResults.length > 0 ? riskResults : DEFAULT_CHIP_CATEGORIES).map((cat) => {
+              const isUnknown = cat.level === 'Unknown';
+              const isPartialLow = cat.level === 'Low' && cat.confidence === 'partial';
+              const isPartialModOrElevated =
+                !isUnknown && (cat.level === 'Moderate' || cat.level === 'Elevated') && cat.confidence === 'partial';
+
+              const dotColor = isUnknown || isPartialLow ? '#9CA3AF' : cat.color;
+              const displayText = isUnknown
+                ? 'Need data'
+                : isPartialLow
+                ? 'Low (limited data)'
+                : cat.level;
+
+              const shortName =
+                cat.category === 'Cardiovascular'
+                  ? 'Cardio'
+                  : cat.category === 'Respiratory'
+                  ? 'Resp'
+                  : cat.category;
+
+              return (
+                <View
+                  key={cat.category}
+                  style={[
+                    s.riskChip,
+                    isPartialLow && s.riskChipGreyOutline,
+                  ]}
+                >
+                  <View style={[s.chipDot, { backgroundColor: dotColor }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.chipCategory} numberOfLines={1}>
+                      {shortName}
+                    </Text>
+                    <Text
+                      style={[
+                        s.chipLevel,
+                        { color: dotColor },
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {displayText}
+                    </Text>
+                    {isPartialModOrElevated && (
+                      <Text style={s.chipLimitedSub} numberOfLines={1}>
+                        Based on limited data
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </Pressable>
       </ScrollView>
     </View>
   );
@@ -515,5 +622,52 @@ const s = StyleSheet.create({
     ...type.labelSm,
     color: colors.outline,
     fontSize: 10,
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: space.xs,
+  },
+  riskChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    backgroundColor: colors.cardLow,
+    paddingVertical: 6,
+    paddingHorizontal: 5,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.cardHigh,
+    minHeight: 52,
+  },
+  riskChipGreyOutline: {
+    borderColor: '#9CA3AF',
+  },
+  chipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginTop: 3,
+  },
+  chipCategory: {
+    ...type.labelSm,
+    color: colors.text,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  chipLevel: {
+    ...type.labelSm,
+    fontSize: 9,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  chipLimitedSub: {
+    ...type.labelSm,
+    fontSize: 7.5,
+    color: colors.outline,
+    marginTop: 2,
+    lineHeight: 10,
   },
 });

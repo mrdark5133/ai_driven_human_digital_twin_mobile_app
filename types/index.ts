@@ -17,6 +17,7 @@ export interface UserProfile {
   bmi: number;
   cellularAge: number;
   isPro: boolean;
+  smokingPerDay?: number;
 }
 
 export interface WatchDevice {

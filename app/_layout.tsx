@@ -98,6 +98,10 @@ export default function RootLayout() {
           name="call-history"
           options={{ presentation: 'card', animation: 'slide_from_right' }}
         />
+        <Stack.Screen
+          name="risk-details"
+          options={{ presentation: 'card', animation: 'slide_from_right' }}
+        />
       </Stack>
     </SafeAreaProvider>
   );

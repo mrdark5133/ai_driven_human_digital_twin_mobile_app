@@ -16,6 +16,7 @@ import { colors, spacing, radii, typography } from '../../theme';
 import { Header } from '../../components/Header';
 import { DataService } from '../../services/dataService';
 import { UserProfile, TelemetrySettings, WatchDevice } from '../../types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -25,6 +26,16 @@ export default function ProfileScreen() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
+    // Check for stored smoking status on mount
+    AsyncStorage.getItem('@profile_smoking_per_day').then((val) => {
+      if (val !== null) {
+        const num = parseInt(val, 10);
+        if (!isNaN(num)) {
+          DataService.updateProfile({ smokingPerDay: num });
+        }
+      }
+    });
+
     const unsubscribe = DataService.subscribe(() => {
       setProfile(DataService.getProfile());
       setWatch(DataService.getWatch());
@@ -42,6 +53,19 @@ export default function ProfileScreen() {
 
   const handleToggleSetting = (key: keyof TelemetrySettings, value: boolean) => {
     DataService.updateSettings({ [key]: value });
+  };
+
+  const handleSmokingChange = async (val?: number) => {
+    DataService.updateProfile({ smokingPerDay: val });
+    try {
+      if (typeof val === 'number') {
+        await AsyncStorage.setItem('@profile_smoking_per_day', val.toString());
+      } else {
+        await AsyncStorage.removeItem('@profile_smoking_per_day');
+      }
+    } catch (err) {
+      console.warn('[Profile] Failed to save smoking status:', err);
+    }
   };
 
   const handleExportData = () => {
@@ -306,6 +330,55 @@ export default function ProfileScreen() {
                 <MaterialIcons name="expand-more" size={16} color={colors.onSurfaceVariant} />
               </View>
             </View>
+
+            {/* Lifestyle & Risk Habits */}
+            <View style={styles.alertsBlock}>
+              <Text style={styles.togglesHeader}>LIFESTYLE HABITS</Text>
+
+              <View style={styles.alertToggleRow}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={styles.alertTitle}>Smoking per day</Text>
+                  <Text style={styles.alertSub}>
+                    {profile.smokingPerDay !== undefined
+                      ? `${profile.smokingPerDay} cigarettes / day`
+                      : 'Not set (default: not set)'}
+                  </Text>
+                </View>
+                <Switch
+                  value={profile.smokingPerDay !== undefined}
+                  onValueChange={(val) => {
+                    handleSmokingChange(val ? 5 : undefined);
+                  }}
+                  trackColor={{ false: colors.surfaceContainerHighest, true: colors.primaryContainer }}
+                  thumbColor={profile.smokingPerDay !== undefined ? colors.primary : colors.outline}
+                />
+              </View>
+
+              {profile.smokingPerDay !== undefined && (
+                <View style={styles.stepperRow}>
+                  <Text style={styles.stepperLabel}>Cigarettes per day</Text>
+                  <View style={styles.stepperControls}>
+                    <TouchableOpacity
+                      onPress={() => handleSmokingChange(Math.max(1, (profile.smokingPerDay || 5) - 1))}
+                      style={styles.stepperBtn}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="remove" size={16} color={colors.onSurface} />
+                    </TouchableOpacity>
+                    <Text style={styles.stepperValText}>{profile.smokingPerDay}</Text>
+                    <TouchableOpacity
+                      onPress={() => handleSmokingChange((profile.smokingPerDay || 5) + 1)}
+                      style={styles.stepperBtn}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="add" size={16} color={colors.onSurface} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.dividerLine} />
 
             {/* Alerts */}
             <View style={styles.alertsBlock}>
@@ -849,6 +922,47 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     fontSize: 11,
     marginTop: 1,
+  },
+  dividerLine: {
+    height: 1,
+    backgroundColor: 'rgba(46, 53, 68, 0.4)',
+    marginVertical: 4,
+  },
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceContainerLow,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.md,
+    marginTop: 4,
+  },
+  stepperLabel: {
+    ...typography.bodySm,
+    color: colors.onSurface,
+    fontSize: 12,
+  },
+  stepperControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  stepperBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surfaceContainerHighest,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepperValText: {
+    ...typography.dataMono,
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '700',
+    minWidth: 20,
+    textAlign: 'center',
   },
   privacyBox: {
     flexDirection: 'row',
